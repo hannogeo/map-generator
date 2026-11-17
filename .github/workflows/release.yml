@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - 'version.json'
   workflow_dispatch:
 
 permissions:
@@ -14,6 +16,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
+      new_tag: ${{ steps.tag.outputs.new }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,16 +28,20 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "tag=v$V" >> $GITHUB_OUTPUT
       - name: Create tag if missing
+        id: tag
         run: |
           if git rev-parse "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
             echo "Tag already exists"
+            echo "new=false" >> $GITHUB_OUTPUT
           else
             git tag "${{ steps.ver.outputs.tag }}"
             git push origin "${{ steps.ver.outputs.tag }}"
+            echo "new=true" >> $GITHUB_OUTPUT
           fi
 
   build:
     needs: tag
+    if: needs.tag.outputs.new_tag == 'true'
     strategy:
       fail-fast: false
       matrix:
