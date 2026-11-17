@@ -13,6 +13,7 @@ use crate::providers::{Providers};
 use crate::tiles::BlueLineMask;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use tokio::sync::Semaphore;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
@@ -40,6 +41,7 @@ pub async fn run(
 
     let start_time = Instant::now();
     let grid = settings.strategy == "grid";
+    let concurrency = Arc::new(Semaphore::new(16));
 
     // Per-polygon goals, used to decide when everything is complete.
     let needs: Arc<HashMap<String, usize>> = Arc::new(
@@ -83,6 +85,7 @@ pub async fn run(
                 stop.clone(),
                 start_time,
                 needs.clone(),
+                concurrency.clone(),
             )
             .await;
         }
@@ -96,6 +99,7 @@ pub async fn run(
             let found_map = found_map.clone();
             let stop = stop.clone();
             let needs = needs.clone();
+            let concurrency = concurrency.clone();
             handles.push(tokio::spawn(async move {
                 run_one(
                     app,
@@ -107,6 +111,7 @@ pub async fn run(
                     stop,
                     start_time,
                     needs,
+                    concurrency,
                 )
                 .await;
             }));
@@ -129,6 +134,7 @@ async fn run_one(
     stop: Arc<AtomicBool>,
     start_time: Instant,
     needs: Arc<HashMap<String, usize>>,
+    concurrency: Arc<Semaphore>,
 ) {
     let rings = match PolyRings::from_geometry(&polygon.geometry) {
         Some(rings) => rings,
@@ -221,16 +227,23 @@ async fn run_one(
                     let providers = providers.clone();
                     let rings = rings.clone();
                     let global_seen = global_seen.clone();
+                    let stop = stop.clone();
+                    let concurrency = concurrency.clone();
                     let pt = *pt;
                     let found_lat_lngs = found_lat_lngs.clone();
                     futs.push(tokio::spawn(async move {
-                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs).await
+                        let _permit = concurrency.acquire().await.ok();
+                        if stop.load(Ordering::Relaxed) {
+                            return Vec::new();
+                        }
+                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs, &stop).await
                     }));
                 }
 
                 for fut in futs {
                     if stop.load(Ordering::Relaxed) {
-                        break 'outer;
+                        fut.abort();
+                        continue;
                     }
                     let Ok(markers) = fut.await else { continue };
                     for marker in markers {
@@ -306,16 +319,23 @@ async fn run_one(
                     let providers = providers.clone();
                     let rings = rings.clone();
                     let global_seen = global_seen.clone();
+                    let stop = stop.clone();
+                    let concurrency = concurrency.clone();
                     let pt = *pt;
                     let found_lat_lngs = found_lat_lngs.clone();
                     futs.push(tokio::spawn(async move {
-                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs).await
+                        let _permit = concurrency.acquire().await.ok();
+                        if stop.load(Ordering::Relaxed) {
+                            return Vec::new();
+                        }
+                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs, &stop).await
                     }));
                 }
 
                 for fut in futs {
                     if stop.load(Ordering::Relaxed) {
-                        break 'outer;
+                        fut.abort();
+                        continue;
                     }
                     let Ok(markers) = fut.await else { continue };
                     for marker in markers {
@@ -366,7 +386,11 @@ async fn process_sample(
     lng: f64,
     global_seen: &Mutex<HashSet<String>>,
     found_lat_lngs: &[LatLng],
+    stop: &AtomicBool,
 ) -> Vec<Marker> {
+    if stop.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
     let filters = Filters::new(settings, providers, rings);
     let candidates = filters.candidates(lat, lng, found_lat_lngs).await;
     let mut out = Vec::new();

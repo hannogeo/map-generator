@@ -37,6 +37,10 @@ Everything is saved automatically and persists between sessions: provider, radiu
 
 Optional desktop (and Discord webhook) notifications when a location is found, a polygon is complete, or all polygons are complete.
 
+## Performance
+
+Generation runs in the Rust backend with parallel sampling, so it's **up to ~2× faster** than the browser-based version with the same settings, while using noticeably less RAM. The UI is a thin webview (Tauri), so the app stays lightweight.
+
 ## Credits
 
 - Inspired by and largely derived from [various-map-generator](https://various-map-generator.pages.dev/).
