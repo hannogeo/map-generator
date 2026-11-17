@@ -421,7 +421,11 @@
 
     <div v-if="updateAvailable" class="update-banner">
       <span>Update {{ updateVersion }} available</span>
-      <button @click="installUpdate">Download &amp; restart</button>
+      <div class="update-progress" v-if="updating">
+        <div class="update-progress-bar" :style="{ width: updateProgress + '%' }"></div>
+      </div>
+      <button @click="installUpdate" :disabled="updating">{{ updating ? 'Downloading… ' + updateProgress + '%' : 'Download & restart' }}</button>
+      <span v-if="updateError" class="update-error">{{ updateError }}</span>
     </div>
   </div>
 </template>
@@ -506,6 +510,9 @@ const showWebhook = ref(false)
 const markersVisible = ref(true)
 const totalGoal = computed(() => polygons.value.reduce((sum, polygon) => sum + (Number(polygon.nbNeeded) || 0), 0))
 let updateHandle: any = null
+const updating = ref(false)
+const updateProgress = ref(-1)
+const updateError = ref('')
 
 const isGoogle = computed(() => settings.value.provider.includes('google'))
 const radiusVisible = computed(() => !['apple', 'naver', 'yandex', 'googleZoom'].includes(settings.value.provider))
@@ -1363,11 +1370,34 @@ async function onNotificationToggle() {
 
 async function installUpdate() {
   if (!updateHandle) return
+  updating.value = true
+  updateProgress.value = 0
+  updateError.value = ''
+  status.value = 'Downloading update…'
+  let total = 0
+  let downloaded = 0
   try {
-    await updateHandle.downloadAndInstall()
+    await updateHandle.downloadAndInstall((event: any) => {
+      if (event.event === 'Started') {
+        total = event.data?.contentLength ?? 0
+        updateProgress.value = 0
+      } else if (event.event === 'Progress') {
+        downloaded += event.data?.chunkLength ?? 0
+        if (total > 0) {
+          updateProgress.value = Math.min(100, Math.round((downloaded / total) * 100))
+        }
+      } else if (event.event === 'Finished') {
+        updateProgress.value = 100
+      }
+    })
+    status.value = 'Update installed, restarting…'
     await relaunch()
-  } catch (error) {
-    console.error(error)
+  } catch (error: any) {
+    console.error('update install failed', error)
+    updateError.value = String(error?.message || error)
+    status.value = 'Update failed: ' + updateError.value
+  } finally {
+    updating.value = false
   }
 }
 </script>

@@ -28,6 +28,7 @@ if (!exePath || !sigPath) {
 }
 
 const exeName = exePath.split(/[\\/]/).pop()
+const publishedName = exeName.replace(/ /g, '.')
 const signature = readFileSync(sigPath, 'utf8').trim()
 
 const latest = {
@@ -37,7 +38,7 @@ const latest = {
   platforms: {
     'windows-x86_64': {
       signature,
-      url: `${baseUrl}/${exeName}`,
+      url: `${baseUrl}/${publishedName}`,
     },
   },
 }

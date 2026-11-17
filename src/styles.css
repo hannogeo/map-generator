@@ -324,6 +324,9 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   box-shadow: 0 8px 22px rgba(0,0,0,.4);
 }
 .update-banner button { background: var(--accent); border-color: var(--accent); color: #1d1007; }
+.update-progress { width: 120px; height: 6px; background: #2b3139; border-radius: 3px; overflow: hidden; }
+.update-progress-bar { height: 100%; background: var(--accent); transition: width .15s ease; }
+.update-error { color: #ff9a9a; font-size: 11px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .modal-backdrop {
   position: absolute;
