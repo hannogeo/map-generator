@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Map Generator",
+  "version": "0.1.0",
+  "identifier": "com.hannogeo.mapgenerator",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Map Generator",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 980,
+        "minHeight": 620,
+        "center": true,
+        "maximized": true,
+        "resizable": true,
+        "backgroundColor": "#101214",
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "shortDescription": "Fast street-level map generator",
+    "longDescription": "Generate random or grid-based street-level panorama locations inside GeoJSON polygons using Google Street View and other coverage providers.",
+    "copyright": "© 2026 Hanno",
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5MkE5MUM5N0VDRTY5MjMKUldRamFjNSt5WkVxdWRJTm9KRXd0ZUFBMUR6Y3R6b2NNRUZHd0Y4T1pORDNKNDVNbmx5U3lyeFgK",
+      "endpoints": [
+        "https://github.com/hannogeo/map-generator/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
