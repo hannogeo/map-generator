@@ -18,7 +18,7 @@
       <h1>Generate street view locations</h1>
       <p class="lead">Pick countries or draw your own polygons and get random panorama locations from Google Street View and thirteen other providers.</p>
       <div class="cta-row">
-        <a class="btn primary" href="https://github.com/hannogeo/map-generator/releases/latest">Download for Windows</a>
+        <a class="btn primary" id="download-btn" href="https://github.com/hannogeo/map-generator/releases/latest">Download for Windows</a>
         <a class="btn ghost" href="https://github.com/hannogeo/map-generator">See on GitHub</a>
       </div>
     </div>
@@ -71,5 +71,24 @@
       <p><a href="https://github.com/hannogeo/map-generator">GitHub</a> · <a href="https://github.com/hannogeo/map-generator/releases">Releases</a> · <a href="https://github.com/hannogeo/map-generator/issues">Issues</a></p>
     </div>
   </footer>
+  <script>
+    (function () {
+      var btn = document.getElementById('download-btn');
+      if (!btn) return;
+      fetch('https://api.github.com/repos/hannogeo/map-generator/releases/latest')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var assets = (data && data.assets) || [];
+          var setup = assets.find(function (a) { return /-setup\.exe$/i.test(a.name); });
+          var msi = assets.find(function (a) { return /\.msi$/i.test(a.name); });
+          var pick = setup || msi;
+          if (pick && pick.browser_download_url) {
+            btn.href = pick.browser_download_url;
+            btn.textContent = 'Download for Windows';
+          }
+        })
+        .catch(function () { /* keep fallback link */ });
+    })();
+  </script>
 </body>
 </html>
