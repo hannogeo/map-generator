@@ -41,7 +41,6 @@ jobs:
 
   build:
     needs: tag
-    if: needs.tag.outputs.new_tag == 'true'
     strategy:
       fail-fast: false
       matrix:
