@@ -5,7 +5,7 @@
     <div class="columns">
       <div class="column left">
         <div class="logo">
-          <span>MapGenerator</span>
+          <span>Map Generator</span>
         </div>
 
         <details class="section" open>
