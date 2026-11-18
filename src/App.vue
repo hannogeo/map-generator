@@ -6,6 +6,7 @@
       <div class="column left">
         <div class="logo">
           <span>Map Generator</span>
+          <span class="version">v{{ appVersion }}</span>
         </div>
 
         <details class="section" open>
@@ -131,7 +132,7 @@
                 <span class="polygon-name" :title="p.name" @click="pickCountry(Number(p.id.replace('country-','')))" >{{ p.name }}</span>
                 <span class="polygon-count">
                   {{ p.found.length }} /
-                  <input type="number" min="0" :value="p.nbNeeded" @change="setNeeded(p, $event)" />
+                  <input type="number" min="0" v-model.number="p.nbNeeded" @change="onGoalChange(p)" />
                 </span>
                 <div class="row-actions">
                   <button class="icon" title="Clear locations" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
@@ -193,6 +194,9 @@
               <span>Speed (attempts)</span>
               <input type="number" min="1" max="1000" v-model.number="settings.speed" />
             </div>
+            <label class="check" title="Skip random points in open water using a bundled land mask">
+              <input type="checkbox" v-model="settings.useLandMask" /> Skip ocean samples
+            </label>
             <div class="field" v-if="radiusVisible">
               <span>Radius (m)</span>
               <input type="number" min="1" v-model.number="settings.radius" />
@@ -422,7 +426,7 @@
 
     <div v-if="running" class="running-indicator" aria-live="polite">
       <span class="spinner"></span>
-      <span>{{ stopping ? 'Stopping…' : 'Generating' }}</span>
+      <span>{{ stopping ? 'Stopping…' : 'Generating' }} · {{ formatElapsed(runElapsed) }}</span>
     </div>
 
     <div v-if="confirmOpen" class="modal-backdrop" @click="cancelReset">
@@ -481,6 +485,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import versionJson from '../version.json'
 import {
   isPermissionGranted as notificationGranted,
   requestPermission as requestNotificationPermission,
@@ -511,6 +516,8 @@ import {
 
 type MarkerRecord = Marker & { polygonId?: string }
 
+const appVersion = versionJson.version
+
 const providers = [
   'google', 'googleZoom', 'apple', 'yandex', 'bing', 'naver', 'mapillary',
   'baidu', 'tencent', 'kakao', 'mapycz', 'openmap', 'asig', 'ja', 'vegbilder',
@@ -536,6 +543,9 @@ const polygons = ref<Polygon[]>([])
 const markers = ref<MarkerRecord[]>([])
 const running = ref(false)
 const stopping = ref(false)
+const runElapsed = ref(0)
+let runStartedAt = 0
+let elapsedTimer: number | undefined
 const status = ref('Ready')
 const drawing = ref(false)
 // Leaflet layers must stay raw: Vue's deep proxies break their internal
@@ -710,6 +720,7 @@ onMounted(async () => {
     persistPolygons()
   }))
   unlisteners.push(await listen('generation:finished', () => {
+    stopElapsedTimer()
     running.value = false
     stopping.value = false
     status.value = `Finished · ${locationCount(markers.value.length)}`
@@ -749,6 +760,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopElapsedTimer()
   window.removeEventListener('beforeunload', persist)
   window.removeEventListener('keydown', onKeyDown)
   if (unlistenClose) unlistenClose()
@@ -1208,11 +1220,25 @@ async function importGeoJson() {
   }
 }
 
-function setNeeded(polygon: Polygon, event: Event) {
-  const value = Number((event.target as HTMLInputElement).value)
-  polygon.nbNeeded = Math.max(polygon.found.length, Number.isFinite(value) ? value : 0)
-  ;(event.target as HTMLInputElement).value = String(polygon.nbNeeded)
+/** Last goal the engine was told about, per polygon, for live goal edits. */
+const goalSentToEngine = new Map<string, number>()
+
+function onGoalChange(polygon: Polygon) {
+  if (!Number.isFinite(polygon.nbNeeded) || polygon.nbNeeded < 0) polygon.nbNeeded = 0
+  polygon.nbNeeded = Math.max(polygon.found.length, polygon.nbNeeded)
   persistPolygons()
+  if (running.value) {
+    const sent = goalSentToEngine.get(polygon.id) ?? polygon.nbNeeded
+    // Raising a goal after its generators have exited needs a fresh run;
+    // otherwise the engine applies the new goal live, without restarting.
+    if (polygon.found.length >= sent && polygon.nbNeeded > sent) {
+      start()
+    } else {
+      invoke('update_goals', { goals: [{ id: polygon.id, nbNeeded: polygon.nbNeeded }] })
+        .then(() => goalSentToEngine.set(polygon.id, polygon.nbNeeded))
+        .catch(error => console.warn('goal update failed', error))
+    }
+  }
 }
 
 function markerColour(marker: Marker) {
@@ -1248,9 +1274,6 @@ function addMarkerToMap(marker: MarkerRecord) {
     fillColor: colour,
     fillOpacity: 1,
   })
-  const date = marker.imageDate || 'unknown date'
-  const extra = marker.updateType ? ` · ${marker.updateType}` : ''
-  layer.bindTooltip(`${date}${extra}`, { direction: 'top', offset: [0, -6] })
   layer.on('click', () => openPanorama(marker))
   markerLayers.push({ marker, layer })
   if (markerVisible(marker)) layer.addTo(markerLayer)
@@ -1329,6 +1352,28 @@ function openPanorama(marker: Marker) {
   openUrl(url).catch(error => { status.value = `Could not open Street View: ${String(error)}` })
 }
 
+function startElapsedTimer() {
+  runElapsed.value = 0
+  runStartedAt = performance.now()
+  if (elapsedTimer) window.clearInterval(elapsedTimer)
+  elapsedTimer = window.setInterval(() => {
+    runElapsed.value = (performance.now() - runStartedAt) / 1000
+  }, 100)
+}
+
+function stopElapsedTimer() {
+  if (!elapsedTimer) return
+  runElapsed.value = (performance.now() - runStartedAt) / 1000
+  window.clearInterval(elapsedTimer)
+  elapsedTimer = undefined
+}
+
+function formatElapsed(seconds: number) {
+  const whole = Math.floor(seconds)
+  if (whole < 60) return `${seconds.toFixed(1)}s`
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
+}
+
 function toggleRun() {
   if (running.value) stop()
   else start()
@@ -1343,6 +1388,7 @@ async function start() {
     status.value = 'All location goals are already met'
     return
   }
+  runElapsed.value = 0
   running.value = true
   stopping.value = false
   status.value = 'Starting…'
@@ -1353,8 +1399,14 @@ async function start() {
     nbNeeded: p.nbNeeded,
     found: p.found,
   }))
+  goalSentToEngine.clear()
+  polygonInput.forEach(p => goalSentToEngine.set(p.id, p.nbNeeded))
   try {
-    await invoke('start_generation', { settings: settings.value, polygons: polygonInput })
+    await invoke('start_generation', {
+      settings: settings.value,
+      polygons: polygonInput,
+    })
+    startElapsedTimer()
   } catch (error) {
     running.value = false
     status.value = `Start failed: ${String(error)}`
@@ -1368,6 +1420,7 @@ async function stop() {
   } catch (error) {
     console.warn('stop failed', error)
   }
+  stopElapsedTimer()
   running.value = false
   stopping.value = false
   status.value = 'Stopped'
@@ -1417,6 +1470,9 @@ async function confirmReset() {
 
 /** Clears countries, locations and drawings but keeps the settings. */
 function clearGenerationState() {
+  stopElapsedTimer()
+  runElapsed.value = 0
+  goalSentToEngine.clear()
   cancelDrawing()
   if (editing.value) cancelEdit()
   markers.value = []

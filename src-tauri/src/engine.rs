@@ -13,7 +13,7 @@ use crate::filters::Filters;
 use crate::geo::{GridGenerator, LatLng, PolyRings};
 use crate::land::is_land_near;
 use crate::models::{
-    LocationEvent, Marker, PolygonDoneEvent, PolygonInput, ProgressEvent, Settings,
+    Goals, LocationEvent, Marker, PolygonDoneEvent, PolygonInput, ProgressEvent, Settings,
 };
 use crate::providers::Providers;
 use crate::tiles::BlueLineMask;
@@ -48,8 +48,8 @@ struct RunContext {
     seen: Mutex<HashSet<String>>,
     /// Markers found per polygon id, this run included.
     counts: Mutex<HashMap<String, usize>>,
-    /// Goal per polygon id, used for the "all complete" notification.
-    needs: HashMap<String, usize>,
+    /// Live goals per polygon id, shared with the `update_goals` command.
+    goals: Goals,
     start: Instant,
     semaphore: Semaphore,
     stop: Arc<AtomicBool>,
@@ -59,9 +59,19 @@ struct PolyRuntime {
     id: String,
     name: String,
     rings: Arc<PolyRings>,
-    needed: usize,
+    goals: Goals,
     /// Accepted coordinates, only maintained when region spacing is on.
     found_points: Mutex<Vec<LatLng>>,
+}
+
+impl PolyRuntime {
+    fn needed(&self) -> usize {
+        self.goals
+            .lock()
+            .ok()
+            .and_then(|goals| goals.get(&self.id).copied())
+            .unwrap_or(1)
+    }
 }
 
 enum PointCheck {
@@ -71,7 +81,7 @@ enum PointCheck {
     Sea,
 }
 
-fn polygon_needed(polygon: &PolygonInput) -> usize {
+pub(crate) fn polygon_needed(polygon: &PolygonInput) -> usize {
     if polygon.nb_needed == 0 {
         1
     } else {
@@ -85,12 +95,12 @@ pub async fn run(
     polygons: Vec<PolygonInput>,
     providers: Arc<Providers>,
     stop: Arc<AtomicBool>,
+    goals: Goals,
 ) {
     let settings = Arc::new(settings);
     let start = Instant::now();
 
     let mut counts = HashMap::new();
-    let mut needs = HashMap::new();
     let mut seen = HashSet::new();
     let mut runtimes: Vec<Arc<PolyRuntime>> = Vec::new();
 
@@ -98,9 +108,7 @@ pub async fn run(
         let Some(rings) = PolyRings::from_geometry(&polygon.geometry) else {
             continue;
         };
-        let needed = polygon_needed(polygon);
         counts.insert(polygon.id.clone(), polygon.found.len());
-        needs.insert(polygon.id.clone(), needed);
         for marker in &polygon.found {
             seen.insert(marker.pano_id.clone());
         }
@@ -117,7 +125,7 @@ pub async fn run(
             id: polygon.id.clone(),
             name: polygon.name.clone(),
             rings: Arc::new(rings),
-            needed,
+            goals: goals.clone(),
             found_points: Mutex::new(found_points),
         }));
     }
@@ -145,7 +153,7 @@ pub async fn run(
         providers,
         seen: Mutex::new(seen),
         counts: Mutex::new(counts),
-        needs,
+        goals,
         start,
         semaphore: Semaphore::new(limit),
         stop,
@@ -176,7 +184,6 @@ pub async fn run(
 async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
     let settings = &ctx.settings;
     let radius = settings.effective_radius();
-    let needed = poly.needed;
     let target = if settings.find_regions {
         1
     } else {
@@ -211,6 +218,8 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
     let mut skip_land_mask = false;
 
     loop {
+        // Read the goal every iteration so live goal edits take effect.
+        let needed = poly.needed();
         if ctx.stop.load(Ordering::Relaxed) || found_count(&ctx, &poly.id) >= needed {
             break;
         }
@@ -226,7 +235,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
                     if ctx.stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, skip_land_mask) {
+                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, settings.use_land_mask, skip_land_mask) {
                         PointCheck::Accept => {
                             point = Some(candidate);
                             break;
@@ -246,7 +255,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
                         break;
                     }
                     let candidate = poly.rings.random_point();
-                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, skip_land_mask) {
+                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, settings.use_land_mask, skip_land_mask) {
                         PointCheck::Accept => {
                             sea_rejections = 0;
                             point = Some(candidate);
@@ -301,6 +310,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
     while set.join_next().await.is_some() {}
 
     let found = found_count(&ctx, &poly.id);
+    let needed = poly.needed();
     if found >= needed {
         let _ = ctx.app.emit(
             "generation:polygon-done",
@@ -325,6 +335,7 @@ fn check_point(
     blue_mask: Option<&BlueLineMask>,
     radius: f64,
     point: LatLng,
+    use_land_mask: bool,
     skip_land_mask: bool,
 ) -> PointCheck {
     if !poly.rings.contains(point.lat, point.lng) {
@@ -335,7 +346,7 @@ fn check_point(
             return PointCheck::Reject;
         }
     }
-    if !skip_land_mask && !is_land_near(point.lat, point.lng) {
+    if use_land_mask && !skip_land_mask && !is_land_near(point.lat, point.lng) {
         return PointCheck::Sea;
     }
     PointCheck::Accept
@@ -382,9 +393,14 @@ async fn try_add_marker(
         *entry += 1;
         let found_len = *entry;
         let all_complete = ctx
-            .needs
-            .iter()
-            .all(|(id, need)| counts.get(id).copied().unwrap_or(0) >= *need);
+            .goals
+            .lock()
+            .map(|goals| {
+                goals
+                    .iter()
+                    .all(|(id, need)| counts.get(id).copied().unwrap_or(0) >= *need)
+            })
+            .unwrap_or(false);
         (found_len, all_complete)
     };
 

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// A panorama link (arrow) to another panorama.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -143,6 +144,21 @@ pub struct PolygonInput {
     pub found: Vec<Marker>,
 }
 
+/// Goal changes sent while a generation is running.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalUpdate {
+    pub id: String,
+    pub nb_needed: u32,
+}
+
+/// Shared, live-editable goals for one generation run.
+pub type Goals = Arc<Mutex<HashMap<String, usize>>>;
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -150,6 +166,9 @@ pub struct Settings {
     pub radius: f64,
     pub speed: usize,
     pub strategy: String,
+    /// Skip random points in open water. On by default for older saved settings.
+    #[serde(default = "default_true")]
+    pub use_land_mask: bool,
     pub num_of_generators: usize,
     pub reject_unofficial: bool,
     pub reject_official: bool,
@@ -205,6 +224,7 @@ impl Default for Settings {
             radius: 500.0,
             speed: 100,
             strategy: "random".into(),
+            use_land_mask: true,
             num_of_generators: 1,
             reject_unofficial: true,
             reject_official: false,

@@ -5,6 +5,7 @@ export const defaultSettings: Settings = {
   radius: 500,
   speed: 100,
   strategy: 'random',
+  useLandMask: true,
   numOfGenerators: 1,
   mapTheme: 'default',
   coverage: { enabled: true, official: true, blobby: false, colorScheme: 'Default', opacity: 1 },

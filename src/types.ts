@@ -32,6 +32,7 @@ export interface Settings {
   radius: number
   speed: number
   strategy: string
+  useLandMask: boolean
   numOfGenerators: number
   mapTheme: string
   coverage: { enabled: boolean; official: boolean; blobby: boolean; colorScheme: string; opacity: number }
