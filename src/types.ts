@@ -78,5 +78,5 @@ export interface Settings {
   tag: boolean
   panoId: string
   markers: { noBlueLine: boolean; newRoad: boolean; gen4: boolean; gen2Or3: boolean; gen1: boolean }
-  notification: { enabled: boolean; anyLocation: boolean; anyNoBlueLine: boolean; onePolygonComplete: boolean; allPolygonsComplete: boolean; sendToDiscord: boolean; discordWebhook?: string }
+  notification: { enabled: boolean; anyLocation: boolean; anyNoBlueLine: boolean; onePolygonComplete: boolean; allPolygonsComplete: boolean; target: 'desktop' | 'discord' | 'both'; discordWebhook?: string }
 }

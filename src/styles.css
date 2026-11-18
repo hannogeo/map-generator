@@ -319,6 +319,33 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   pointer-events: none;
 }
 .zoom-indicator.down { bottom: 8px; }
+.running-indicator {
+  position: absolute;
+  z-index: 1000;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  pointer-events: none;
+}
+.running-indicator .spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent-2);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .update-banner {
   position: absolute;
   z-index: 1200;

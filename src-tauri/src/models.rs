@@ -316,7 +316,8 @@ pub struct NotificationConfig {
     pub any_no_blue_line: bool,
     pub one_polygon_complete: bool,
     pub all_polygons_complete: bool,
-    pub send_to_discord: bool,
+    /// Where notifications go: "desktop", "discord", or "both".
+    pub target: String,
     pub discord_webhook: Option<String>,
 }
 

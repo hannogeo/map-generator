@@ -59,13 +59,22 @@ export const defaultSettings: Settings = {
   tag: true,
   panoId: 'enable',
   markers: { noBlueLine: true, newRoad: true, gen4: true, gen2Or3: true, gen1: true },
-  notification: { enabled: false, anyLocation: false, anyNoBlueLine: false, onePolygonComplete: false, allPolygonsComplete: false, sendToDiscord: false, discordWebhook: '' },
+  notification: { enabled: false, anyLocation: false, anyNoBlueLine: false, onePolygonComplete: false, allPolygonsComplete: false, target: 'desktop', discordWebhook: '' },
 }
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem('mg:settings')
-    if (raw) return mergeSettings(defaultSettings, JSON.parse(raw))
+    if (raw) {
+      const saved = JSON.parse(raw)
+      // Older builds always showed desktop notifications and had a separate
+      // `sendToDiscord` flag. Preserve that behaviour as "both" / "desktop".
+      const oldNotification = saved?.notification
+      if (oldNotification && !oldNotification.target && typeof oldNotification.sendToDiscord === 'boolean') {
+        oldNotification.target = oldNotification.sendToDiscord ? 'both' : 'desktop'
+      }
+      return mergeSettings(defaultSettings, saved)
+    }
   } catch {}
   return { ...defaultSettings }
 }

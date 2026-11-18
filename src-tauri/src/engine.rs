@@ -414,9 +414,11 @@ async fn try_add_marker(
         let elapsed = ctx.start.elapsed().as_secs_f64();
         let elapsed_str = format!("{:.1}", elapsed);
         let is_no_blue = marker.update_type.as_deref() == Some("noblueline");
-        let discord = ctx.settings.notification.send_to_discord
-            && ctx.settings.provider.contains("google");
         let notification = &ctx.settings.notification;
+        // Discord links are Google-only; other providers always fall back to desktop.
+        let discord_available = ctx.settings.provider.contains("google");
+        let discord = discord_available && matches!(notification.target.as_str(), "discord" | "both");
+        let desktop = !discord_available || notification.target.as_str() != "discord";
         if notification.any_location && found_len == 1 {
             let link = format!(
                 "https://www.google.com/maps/@?api=1&map_action=pano&pano={}&heading={}&pitch={}&fov={}",
@@ -431,6 +433,7 @@ async fn try_add_marker(
                 &format!("First location found in {} ({}s)", poly.name, elapsed_str),
                 "",
                 Some(&link),
+                desktop,
                 discord,
             )
             .await;
@@ -449,6 +452,7 @@ async fn try_add_marker(
                 &format!("No blue line location found in {} ({}s)", poly.name, elapsed_str),
                 "",
                 Some(&link),
+                desktop,
                 discord,
             )
             .await;
@@ -460,6 +464,7 @@ async fn try_add_marker(
                 "Polygon Completed",
                 &format!("Polygon has reached its goal ({}s)", elapsed_str),
                 None,
+                desktop,
                 discord,
             )
             .await;
@@ -471,6 +476,7 @@ async fn try_add_marker(
                 "Generation Completed",
                 &format!("All polygons have reached their goals ({}s)", elapsed_str),
                 None,
+                desktop,
                 discord,
             )
             .await;
@@ -486,9 +492,12 @@ async fn send_notification(
     title: &str,
     body: &str,
     link: Option<&str>,
+    desktop: bool,
     discord: bool,
 ) {
-    let _ = app.notification().builder().title(title).body(body).show();
+    if desktop {
+        let _ = app.notification().builder().title(title).body(body).show();
+    }
     if discord {
         if let Some(url) = settings.notification.discord_webhook.clone() {
             let client = reqwest::Client::new();
