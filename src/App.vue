@@ -132,6 +132,9 @@
                 </div>
               </div>
             </div>
+            <div class="actions" v-if="markers.length">
+              <button class="danger clear-all" @click="askClearAllLocations">Clear all locations</button>
+            </div>
           </div>
         </details>
 
@@ -140,12 +143,13 @@
           <div class="body">
             <div class="actions">
               <button :disabled="!markers.length" @click="copyMarkers(markers)">Copy JSON</button>
-              <button :disabled="!markers.length" @click="exportJson(markers, 'map-generator')">JSON</button>
-              <button :disabled="!markers.length" @click="exportCsv(markers, 'map-generator')">CSV</button>
-              <button class="danger" :disabled="!markers.length" @click="clearAllLocations">Clear all</button>
+              <button :disabled="!markers.length" :title="markers.length ? exportFileName + '.json' : ''" @click="exportJson(markers)">JSON</button>
+              <button :disabled="!markers.length" :title="markers.length ? exportFileName + '.csv' : ''" @click="exportCsv(markers)">CSV</button>
             </div>
           </div>
         </details>
+
+        <div class="export-notice" v-if="exportNotice" aria-live="polite">{{ exportNotice }}</div>
       </div>
 
       <div class="column right">
@@ -419,6 +423,17 @@
       </div>
     </div>
 
+    <div v-if="clearAllOpen" class="modal-backdrop" @click="clearAllOpen = false">
+      <div class="modal" @click.stop>
+        <div class="modal-title">Clear all locations?</div>
+        <div class="modal-body">This removes {{ locationCount(markers.length) }} from the map. Selected countries and their goals are kept.</div>
+        <div class="modal-actions">
+          <button @click="clearAllOpen = false">Cancel</button>
+          <button class="danger" @click="confirmClearAllLocations">Clear</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="updateAvailable" class="update-banner">
       <span>Update {{ updateVersion }} available</span>
       <div class="update-progress" v-if="updating">
@@ -431,10 +446,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import L from 'leaflet'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { check } from '@tauri-apps/plugin-updater'
@@ -520,6 +536,11 @@ const radiusVisible = computed(() => !['apple', 'naver', 'yandex', 'googleZoom']
 let map: L.Map
 let markerLayer: L.LayerGroup
 let customLayer: L.LayerGroup
+// Markers and drawn overlays use SVG renderers: a Canvas renderer fills the
+// whole pane and swallows every map click, which made country selection stop
+// working as soon as one marker existed.
+let markerRenderer: L.SVG
+let customRenderer: L.SVG
 let countryLayer: L.GeoJSON | null = null
 let activeBase: L.Layer | null = null
 let activeLabels: L.Layer | null = null
@@ -527,6 +548,7 @@ let coverageLayer: L.TileLayer | null = null
 // base cache no longer used
 const markerLayers: Array<{ marker: MarkerRecord; layer: L.CircleMarker }> = []
 const unlisteners: Array<() => void> = []
+let unlistenClose: (() => void) | undefined
 
 const generationDefinitions: Record<string, Array<{ key: string; label: string }>> = {
   google: [
@@ -614,6 +636,8 @@ onMounted(async () => {
   map.createPane('markersPane')
   map.getPane('markersPane')!.style.zIndex = '650'
 
+  markerRenderer = L.svg({ pane: 'markersPane' })
+  customRenderer = L.svg({ pane: 'customPane' })
   markerLayer = L.layerGroup().addTo(map)
   customLayer = L.layerGroup().addTo(map)
 
@@ -628,22 +652,22 @@ onMounted(async () => {
 
   unlisteners.push(await listen('generation:location', (event: any) => {
     const payload = event.payload
+    const polygon = polygons.value.find(p => p.id === payload.polygonId)
+    // Late events from a stopped or reset run are dropped: the polygon is gone.
+    if (!polygon) return
     const marker = payload.location as MarkerRecord
     if (markers.value.some(m => m.panoId === marker.panoId && m.source === marker.source)) return
     marker.polygonId = payload.polygonId
     markers.value.push(marker)
     addMarkerToMap(marker)
-    const polygon = polygons.value.find(p => p.id === payload.polygonId)
-    if (polygon) {
-      polygon.found.push(marker)
-      status.value = `${polygon.name}: ${polygon.found.length}/${polygon.nbNeeded}`
-    }
+    polygon.found.push(marker)
+    setProgressStatus(`${polygon.name}: ${polygon.found.length}/${polygon.nbNeeded}`)
     persistPolygons()
   }))
   unlisteners.push(await listen('generation:progress', (event: any) => {
     const payload = event.payload
     const polygon = polygons.value.find(p => p.id === payload.polygonId)
-    if (polygon) status.value = `${polygon.name}: ${payload.found}/${payload.needed ?? polygon.nbNeeded}`
+    if (polygon) setProgressStatus(`${polygon.name}: ${payload.found}/${payload.needed ?? polygon.nbNeeded}`)
   }))
   unlisteners.push(await listen('generation:polygon-done', (event: any) => {
     const polygon = polygons.value.find(p => p.id === event.payload.polygonId)
@@ -653,12 +677,29 @@ onMounted(async () => {
   unlisteners.push(await listen('generation:finished', () => {
     running.value = false
     stopping.value = false
-    status.value = `Finished · ${markers.value.length} location(s)`
+    status.value = `Finished · ${locationCount(markers.value.length)}`
     persistPolygons()
   }))
 
   window.addEventListener('beforeunload', persist)
   window.addEventListener('keydown', onKeyDown)
+
+  // Closing the app works like Reset: locations and selected countries are
+  // dropped, settings are kept.
+  try {
+    const appWindow = getCurrentWindow()
+    unlistenClose = await appWindow.onCloseRequested(async event => {
+      event.preventDefault()
+      try {
+        if (running.value) await stop()
+        clearGenerationState()
+      } finally {
+        await appWindow.destroy()
+      }
+    })
+  } catch (error) {
+    console.warn('close handler unavailable', error)
+  }
 
   try {
     const update = await check()
@@ -675,17 +716,38 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', persist)
   window.removeEventListener('keydown', onKeyDown)
+  if (unlistenClose) unlistenClose()
   unlisteners.forEach(unlisten => unlisten())
-  persistPolygons()
+  persistPolygons(true)
   if (map) map.remove()
 })
 
 function persist() {
   saveSettings(settings.value)
-  persistPolygons()
+  persistPolygons(true)
 }
 
-function persistPolygons() {
+let persistTimer: number | undefined
+
+function persistPolygons(immediate = false) {
+  if (immediate) {
+    if (persistTimer) {
+      window.clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    writePolygons()
+    return
+  }
+  // Generation can emit hundreds of locations per second; writing the whole
+  // list on every event wastes time, so coalesce the writes.
+  if (persistTimer) return
+  persistTimer = window.setTimeout(() => {
+    persistTimer = undefined
+    writePolygons()
+  }, 400)
+}
+
+function writePolygons() {
   try {
     const slim = polygons.value.map(p => ({
       id: p.id,
@@ -722,7 +784,7 @@ async function loadSavedPolygons() {
       }
     }
     refreshCountryStyles()
-    if (markers.value.length) status.value = `${markers.value.length} saved location(s) loaded`
+    if (markers.value.length) status.value = `${locationCount(markers.value.length)} loaded`
   } catch (error) {
     console.warn('failed to load saved polygons', error)
   }
@@ -733,10 +795,14 @@ function providerLabel(provider: string) {
 }
 
 function addCustomLayer(polygon: Polygon) {
-  customLayer.addLayer(L.geoJSON(polygon.geometry as any, {
+  // `renderer` is a Path option that the GeoJSON typings do not list.
+  const options = {
     pane: 'customPane',
+    renderer: customRenderer,
+    interactive: false,
     style: { color: '#e07a3f', weight: 2, fillOpacity: 0.1 },
-  }))
+  }
+  customLayer.addLayer(L.geoJSON(polygon.geometry as any, options))
 }
 
 function roadmapLayer(name: string): L.Layer {
@@ -858,11 +924,12 @@ async function loadCountries() {
         })
         layer.on('mouseover', () => {
           const selected = polygons.value.some(p => p.id === countryId(feature))
-          if (!selected) (layer as L.Path).setStyle({ opacity: 0.55, weight: 1, fillOpacity: 0.1 })
+          if (!selected) (layer as L.Path).setStyle({ opacity: 0.55, weight: 1, fillOpacity: 0.08 })
         })
         layer.on('mouseout', () => {
-          const selected = polygons.value.some(p => p.id === countryId(feature))
-          if (!selected) (layer as L.Path).setStyle({ opacity: 0.12, weight: 0.5, fillOpacity: 0 })
+          // Restore the shared style so a country selected while hovering keeps
+          // its highlight.
+          ;(layer as L.Path).setStyle(featureStyle(feature))
         })
       },
     }).addTo(map)
@@ -880,8 +947,9 @@ function featureStyle(feature: any) {
   return {
     pane: 'countriesPane',
     color: selected ? '#e07a3f' : '#7d8794',
-    weight: selected ? 1.5 : 0.5,
-    opacity: selected ? 0.9 : 0.12,
+    weight: selected ? 1.5 : 1,
+    // Unselected borders stay invisible; hovering reveals them.
+    opacity: selected ? 0.9 : 0,
     fillColor: '#e07a3f',
     fillOpacity: selected ? 0.28 : 0,
   }
@@ -925,11 +993,13 @@ function onMapClick(event: L.LeafletMouseEvent) {
   if (!drawing.value) return
   drawPoints.value.push(event.latlng)
   const dot = L.circleMarker(event.latlng, {
-    pane: 'markersPane', radius: 4, color: '#e07a3f', fillColor: '#e07a3f', fillOpacity: 1,
+    pane: 'markersPane', renderer: markerRenderer, radius: 4, color: '#e07a3f', fillColor: '#e07a3f', fillOpacity: 1,
   }).addTo(map)
   drawMarkers.value.push(dot)
   if (drawLine.value) map.removeLayer(drawLine.value as any)
-  drawLine.value = L.polyline(drawPoints.value, { pane: 'customPane', color: '#e07a3f', weight: 2 }).addTo(map)
+  drawLine.value = L.polyline(drawPoints.value, {
+    pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
+  }).addTo(map)
 }
 
 function toggleDraw() {
@@ -959,6 +1029,12 @@ function finishDraw() {
     addCustomLayer(polygon)
     persistPolygons()
   }
+  cancelDrawing()
+  status.value = 'Ready'
+}
+
+/** Drops the in-progress draw overlays and leaves draw mode. */
+function cancelDrawing() {
   drawMarkers.value.forEach(dot => map.removeLayer(dot as any))
   drawMarkers.value = []
   if (drawLine.value) {
@@ -966,9 +1042,10 @@ function finishDraw() {
     drawLine.value = null
   }
   drawPoints.value = []
-  drawing.value = false
-  map.doubleClickZoom.enable()
-  status.value = 'Ready'
+  if (drawing.value) {
+    drawing.value = false
+    map.doubleClickZoom.enable()
+  }
 }
 
 function removePolygon(id: string) {
@@ -1051,6 +1128,7 @@ function addMarkerToMap(marker: MarkerRecord) {
   const colour = markerColour(marker)
   const layer = L.circleMarker([marker.lat, marker.lng], {
     pane: 'markersPane',
+    renderer: markerRenderer,
     radius: 5,
     color: '#0d0f11',
     weight: 1,
@@ -1066,9 +1144,12 @@ function addMarkerToMap(marker: MarkerRecord) {
 }
 
 function removeMarkerRecord(marker: MarkerRecord) {
-  const index = markers.value.indexOf(marker)
+  // `marker` can be a reactive proxy (from `polygon.found`) while
+  // `markerLayers` holds the raw objects, so compare against the raw value.
+  const raw = toRaw(marker)
+  const index = markers.value.indexOf(raw as MarkerRecord)
   if (index >= 0) markers.value.splice(index, 1)
-  const entryIndex = markerLayers.findIndex(entry => entry.marker === marker)
+  const entryIndex = markerLayers.findIndex(entry => toRaw(entry.marker) === raw)
   if (entryIndex >= 0) {
     markerLayer.removeLayer(markerLayers[entryIndex].layer)
     markerLayers.splice(entryIndex, 1)
@@ -1180,6 +1261,33 @@ async function stop() {
 }
 
 const confirmOpen = ref(false)
+const clearAllOpen = ref(false)
+const exportNotice = ref('')
+let exportNoticeTimer: number | undefined
+
+/** "1 location" / "24 locations". */
+function locationCount(count: number) {
+  return `${count} ${count === 1 ? 'location' : 'locations'}`
+}
+
+/** Short-lived confirmation shown under the export buttons. */
+function showExportNotice(text: string) {
+  exportNotice.value = text
+  if (exportNoticeTimer) window.clearTimeout(exportNoticeTimer)
+  exportNoticeTimer = window.setTimeout(() => {
+    exportNotice.value = ''
+  }, 2600)
+}
+
+let lastProgressAt = 0
+
+/** Progress events can arrive faster than the UI needs to repaint. */
+function setProgressStatus(text: string) {
+  const now = Date.now()
+  if (now - lastProgressAt < 120) return
+  lastProgressAt = now
+  status.value = text
+}
 
 async function resetGeneration() {
   if (running.value) await stop()
@@ -1188,17 +1296,23 @@ async function resetGeneration() {
 
 async function confirmReset() {
   confirmOpen.value = false
+  clearGenerationState()
+  status.value = 'Generation reset'
+}
+
+/** Clears countries, locations and drawings but keeps the settings. */
+function clearGenerationState() {
+  cancelDrawing()
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
   markersVisible.value = true
   markerLayer.addTo(map)
-  polygons.value.forEach(polygon => polygon.found.forEach(marker => removeMarkerRecord(marker)))
   polygons.value = []
   customLayer.clearLayers()
   refreshCountryStyles()
-  status.value = 'Generation reset'
-  persistPolygons()
+  // Write immediately: the app can be closing right after this.
+  persistPolygons(true)
 }
 
 function cancelReset() {
@@ -1212,7 +1326,13 @@ function clearPolygonLocations(polygon: Polygon) {
   persistPolygons()
 }
 
-function clearAllLocations() {
+function askClearAllLocations() {
+  if (!markers.value.length) return
+  clearAllOpen.value = true
+}
+
+function confirmClearAllLocations() {
+  clearAllOpen.value = false
   polygons.value.forEach(polygon => {
     polygon.found.forEach(marker => removeMarkerRecord(marker))
     polygon.found = []
@@ -1259,23 +1379,30 @@ async function copyMarkers(markerList: MarkerRecord[]) {
   const text = JSON.stringify(buildExport(markerList), null, 2)
   try {
     await navigator.clipboard.writeText(text)
-    status.value = `Copied ${markerList.length} location(s)`
   } catch {
-    const area = document.createElement('textarea')
-    area.value = text
-    document.body.appendChild(area)
-    area.select()
-    document.execCommand('copy')
-    document.body.removeChild(area)
-    status.value = `Copied ${markerList.length} location(s)`
+    try {
+      const area = document.createElement('textarea')
+      area.value = text
+      document.body.appendChild(area)
+      area.select()
+      document.execCommand('copy')
+      document.body.removeChild(area)
+    } catch {
+      showExportNotice('Could not copy to the clipboard')
+      return
+    }
   }
+  showExportNotice(`Copied ${locationCount(markerList.length)}`)
 }
 
-function exportJson(markerList: MarkerRecord[], name: string) {
-  saveText(`${safeName(name)}.json`, JSON.stringify(buildExport(markerList), null, 2), 'json')
+const exportFileName = computed(() => exportBaseName(markers.value))
+
+function exportJson(markerList: MarkerRecord[]) {
+  const name = `${exportBaseName(markerList)}.json`
+  saveText(name, JSON.stringify(buildExport(markerList), null, 2), 'json')
 }
 
-function exportCsv(markerList: MarkerRecord[], name: string) {
+function exportCsv(markerList: MarkerRecord[]) {
   const header = 'panoId,lat,lng,heading,pitch,zoom,imageDate,updateType,country,region,locality,road,source'
   const rows = buildExport(markerList).map(item => [
     item.panoId ?? '',
@@ -1292,11 +1419,29 @@ function exportCsv(markerList: MarkerRecord[], name: string) {
     item.road ?? '',
     item.source ?? '',
   ].map(value => `"${String(value).replaceAll('"', '""')}"`).join(','))
-  saveText(`${safeName(name)}.csv`, [header, ...rows].join('\n'), 'csv')
+  const name = `${exportBaseName(markerList)}.csv`
+  saveText(name, [header, ...rows].join('\n'), 'csv')
+}
+
+/** "Estonia-1000-locations" (or "3-countries-1000-locations" for mixed exports). */
+function exportBaseName(markerList: MarkerRecord[]) {
+  const polygonNames = new Map(polygons.value.map(polygon => [polygon.id, polygon.name]))
+  const countries = [...new Set(markerList
+    .map(marker => ((marker.polygonId && polygonNames.get(marker.polygonId)) || marker.country || '').trim())
+    .filter(Boolean))]
+  const label = countries.length === 0
+    ? 'All-countries'
+    : countries.length === 1
+      ? countries[0]
+      : `${countries.length}-countries`
+  return `${safeName(label)}-${markerList.length}-locations`
 }
 
 function safeName(name: string) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'locations'
+  return name
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s.-]+|[\s.-]+$/g, '') || 'map-generator'
 }
 
 async function saveText(name: string, content: string, extension: string) {
@@ -1305,11 +1450,13 @@ async function saveText(name: string, content: string, extension: string) {
       defaultPath: name,
       filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
     })
-    if (path) {
-      await invoke('write_text_file', { path, content })
-      status.value = `Saved ${name}`
+    if (!path) {
+      showExportNotice('Save cancelled')
       return
     }
+    await invoke('write_text_file', { path, content })
+    showExportNotice(`Saved ${name}`)
+    return
   } catch (error) {
     console.warn('native save failed, falling back to download', error)
   }
@@ -1320,7 +1467,7 @@ async function saveText(name: string, content: string, extension: string) {
   anchor.download = name
   anchor.click()
   URL.revokeObjectURL(url)
-  status.value = `Saved ${name}`
+  showExportNotice(`Downloaded ${name}`)
 }
 
 function isGenerationChecked(key: string) {

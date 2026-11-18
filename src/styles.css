@@ -202,6 +202,19 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .row.small { margin-top: 2px; }
 .actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
 .actions button { flex: 1 1 auto; }
+.clear-all { margin-top: 4px; }
+.export-notice {
+  flex: none;
+  margin-top: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 5px;
+  background: var(--panel-2);
+  font-size: 11px;
+  color: var(--accent-2);
+  word-break: break-word;
+}
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 
 .search-wrap { position: relative; }
@@ -254,7 +267,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .polygon-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .polygon-name:hover { color: var(--accent); }
 .polygon-count { display: flex; align-items: center; gap: 4px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-.polygon-count input { width: 52px; height: 22px; padding: 1px 4px; text-align: right; }
+.polygon-count input { width: 96px; height: 22px; padding: 1px 4px; text-align: left; font-variant-numeric: tabular-nums; }
 .row-actions { display: flex; gap: 4px; flex: none; }
 .row-actions button { height: 22px; padding: 0 8px; font-size: 11px; }
 
