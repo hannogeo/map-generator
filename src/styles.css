@@ -250,7 +250,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .search-results .country-parent { color: var(--muted); font-size: 10px; margin-left: 6px; }
 .search-results .hint { padding: 4px 6px; }
 
-.polygon-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.polygon-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; margin-top: 2px; }
 .polygon-row {
   display: flex;
   align-items: center;
@@ -308,7 +308,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   position: absolute;
   z-index: 1000;
   left: 50%;
-  bottom: 34px;
+  bottom: 38px;
   transform: translateX(-50%);
   font-size: 10px;
   color: var(--muted);
@@ -376,4 +376,13 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   box-shadow: 0 6px 16px rgba(0,0,0,.4);
   font-size: 11px;
 }
-.leaflet-tooltip-top:before { border-top-color: var(--border); }
+.edit-vertex {
+  width: 12px; height: 12px;
+  background: #e07a3f;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+  cursor: grab;
+}
+
+.is-drawing, .is-drawing .leaflet-interactive { cursor: crosshair !important; }

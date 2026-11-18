@@ -114,11 +114,11 @@
               </div>
             </div>
             <div class="actions">
-              <button @mousedown.prevent @click="toggleDraw">{{ drawing ? 'Finish drawing' : 'Draw polygon' }}</button>
+              <button @mousedown.prevent @click="toggleDraw">{{ drawing ? 'Finish drawing' : (editing ? 'Finish editing' : 'Draw polygon') }}</button>
               <button @mousedown.prevent @click="importGeoJson">Import GeoJSON</button>
               <button @mousedown.prevent @click="clearPolygons">Deselect all</button>
             </div>
-            <div class="hint" v-if="!polygons.length">Click countries on the map, search above, or draw your own polygon.</div>
+            <div class="hint" v-if="!polygons.length" style="margin-top: 2px">Click countries on the map, search above, or draw your own polygon.</div>
             <div class="polygon-list" v-else>
               <div class="polygon-row" v-for="p in polygons" :key="p.id">
                 <span class="polygon-name" :title="p.name" @click="pickCountry(Number(p.id.replace('country-','')))" >{{ p.name }}</span>
@@ -128,6 +128,7 @@
                 </span>
                 <div class="row-actions">
                   <button class="icon" title="Clear locations" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
+                  <button class="icon" title="Edit polygon" v-if="p.id.startsWith('poly-')" @click="startEdit(p)">Edit</button>
                   <button class="icon danger" title="Remove country" @click="removePolygon(p.id)">×</button>
                 </div>
               </div>
@@ -515,6 +516,10 @@ const drawing = ref(false)
 const drawPoints = ref<L.LatLng[]>([])
 const drawLine = ref<L.Polyline | null>(null)
 const drawMarkers = ref<L.CircleMarker[]>([])
+const editing = ref<Polygon | null>(null)
+const editMarkers = ref<L.Marker[]>([])
+const editPoints = ref<L.LatLng[]>([])
+const editLine = ref<L.Polygon | null>(null)
 const currentZoom = ref(3)
 const countryQuery = ref('')
 const countryFeatures = ref<any[]>([])
@@ -645,7 +650,7 @@ onMounted(async () => {
   applyCoverage()
   map.on('zoomend', () => { currentZoom.value = map.getZoom() })
   map.on('click', onMapClick)
-  map.on('dblclick', finishDraw)
+  map.on('dblclick', onDblClick)
 
   await loadCountries()
   await loadSavedPolygons()
@@ -923,10 +928,12 @@ async function loadCountries() {
           if (index >= 0) toggleCountryByIndex(index)
         })
         layer.on('mouseover', () => {
+          if (drawing.value) return
           const selected = polygons.value.some(p => p.id === countryId(feature))
           if (!selected) (layer as L.Path).setStyle({ opacity: 0.55, weight: 1, fillOpacity: 0.08 })
         })
         layer.on('mouseout', () => {
+          if (drawing.value) return
           // Restore the shared style so a country selected while hovering keeps
           // its highlight.
           ;(layer as L.Path).setStyle(featureStyle(feature))
@@ -990,28 +997,56 @@ function toggleCountryByIndex(index: number) {
 }
 
 function onMapClick(event: L.LeafletMouseEvent) {
+  if (editing.value) return
   if (!drawing.value) return
+  // Finish by clicking near the first vertex.
+  if (drawPoints.value.length >= 3) {
+    const first = drawPoints.value[0]
+    const a = map.latLngToContainerPoint(first)
+    const b = map.latLngToContainerPoint(event.latlng)
+    if (Math.hypot(a.x - b.x, a.y - b.y) <= 16) {
+      finishDraw()
+      return
+    }
+  }
   drawPoints.value.push(event.latlng)
+  const isFirst = drawPoints.value.length === 1
   const dot = L.circleMarker(event.latlng, {
-    pane: 'markersPane', renderer: markerRenderer, radius: 4, color: '#e07a3f', fillColor: '#e07a3f', fillOpacity: 1,
+    pane: 'markersPane', renderer: markerRenderer,
+    radius: isFirst ? 9 : 4,
+    color: '#e07a3f', fillColor: isFirst ? '#ffffff' : '#e07a3f', fillOpacity: 1,
+    weight: isFirst ? 2.5 : 1,
   }).addTo(map)
+  if (isFirst) {
+    dot.on('click', (e: any) => { L.DomEvent.stopPropagation(e); finishDraw() })
+  }
   drawMarkers.value.push(dot)
-  if (drawLine.value) map.removeLayer(drawLine.value as any)
-  drawLine.value = L.polyline(drawPoints.value, {
-    pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
-  }).addTo(map)
+  if (drawLine.value) {
+    drawLine.value.setLatLngs(drawPoints.value)
+  } else {
+    drawLine.value = L.polyline(drawPoints.value, {
+      pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
+    }).addTo(map)
+  }
 }
 
 function toggleDraw() {
   if (drawing.value) finishDraw()
+  else if (editing.value) finishEdit()
   else {
     drawing.value = true
     drawPoints.value = []
     map.doubleClickZoom.disable()
-    status.value = 'Click to place vertices · double-click to finish'
+    map.getContainer().classList.add('is-drawing')
+    map.getContainer().style.cursor = 'crosshair'
+    status.value = 'Click to place vertices · click first point or double-click to finish · Backspace to undo'
   }
 }
 
+function onDblClick() {
+  if (drawing.value) finishDraw()
+  else if (editing.value) finishEdit()
+}
 function finishDraw() {
   if (!drawing.value) return
   if (drawPoints.value.length >= 3) {
@@ -1045,6 +1080,8 @@ function cancelDrawing() {
   if (drawing.value) {
     drawing.value = false
     map.doubleClickZoom.enable()
+    map.getContainer().classList.remove('is-drawing')
+    map.getContainer().style.cursor = ''
   }
 }
 
@@ -1303,6 +1340,7 @@ async function confirmReset() {
 /** Clears countries, locations and drawings but keeps the settings. */
 function clearGenerationState() {
   cancelDrawing()
+  if (editing.value) cancelEdit()
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
@@ -1319,6 +1357,85 @@ function cancelReset() {
   confirmOpen.value = false
 }
 
+function startEdit(polygon: Polygon) {
+  if (drawing.value) finishDraw()
+  if (editing.value) finishEdit()
+  editing.value = polygon
+  const coords = (polygon.geometry as any).coordinates[0] as number[][]
+  editPoints.value = coords.slice(0, -1).map(c => L.latLng(c[1], c[0]))
+  // hide the original polygon layer while editing
+  customLayer.clearLayers()
+  polygons.value.filter(p => p.id !== polygon.id && p.id.startsWith('poly-')).forEach(addCustomLayer)
+  // vertex markers (draggable)
+  const icon = L.divIcon({ className: 'edit-vertex', html: '', iconSize: [12, 12], iconAnchor: [6, 6] })
+  editMarkers.value = editPoints.value.map((pt, idx) => {
+    const m = L.marker(pt, { icon, draggable: true, pane: 'markersPane' } as any).addTo(map)
+    m.on('drag', () => {
+      const ll = m.getLatLng()
+      editPoints.value[idx] = ll
+      if (editLine.value) editLine.value.setLatLngs(editPoints.value)
+    })
+    m.on('dblclick', (e: any) => { L.DomEvent.stopPropagation(e); removeEditVertex(idx) })
+    return m
+  })
+  editLine.value = L.polygon(editPoints.value, {
+    pane: 'customPane', renderer: customRenderer, interactive: false,
+    color: '#e07a3f', weight: 2, fillOpacity: 0.1,
+  }).addTo(map)
+  map.doubleClickZoom.disable()
+  map.getContainer().style.cursor = 'grab'
+  status.value = 'Drag vertices to edit · double-click a vertex to remove · Enter/Esc to finish'
+}
+
+function removeEditVertex(idx: number) {
+  if (editPoints.value.length <= 3) return
+  editPoints.value.splice(idx, 1)
+  const m = editMarkers.value.splice(idx, 1)[0]
+  if (m) map.removeLayer(m as any)
+  // rebuild markers to keep indices in sync
+  rebuildEditMarkers()
+  if (editLine.value) editLine.value.setLatLngs(editPoints.value)
+}
+
+function rebuildEditMarkers() {
+  editMarkers.value.forEach(m => map.removeLayer(m as any))
+  const icon = L.divIcon({ className: 'edit-vertex', html: '', iconSize: [12, 12], iconAnchor: [6, 6] })
+  editMarkers.value = editPoints.value.map((pt, idx) => {
+    const m = L.marker(pt, { icon, draggable: true, pane: 'markersPane' } as any).addTo(map)
+    m.on('drag', () => {
+      const ll = m.getLatLng()
+      editPoints.value[idx] = ll
+      if (editLine.value) editLine.value.setLatLngs(editPoints.value)
+    })
+    m.on('dblclick', (e: any) => { L.DomEvent.stopPropagation(e); removeEditVertex(idx) })
+    return m
+  })
+}
+
+function finishEdit() {
+  if (!editing.value) return
+  const polygon = editing.value
+  const coordinates = editPoints.value.map(p => [p.lng, p.lat])
+  coordinates.push(coordinates[0])
+  polygon.geometry = { type: 'Polygon', coordinates: [coordinates] }
+  // re-add original layer
+  customLayer.clearLayers()
+  polygons.value.filter(p => p.id.startsWith('poly-')).forEach(addCustomLayer)
+  cancelEdit()
+  persistPolygons()
+  status.value = 'Polygon updated'
+}
+
+function cancelEdit() {
+  editMarkers.value.forEach(m => map.removeLayer(m as any))
+  editMarkers.value = []
+  if (editLine.value) { map.removeLayer(editLine.value as any); editLine.value = null }
+  editPoints.value = []
+  editing.value = null
+  map.doubleClickZoom.enable()
+  map.getContainer().classList.remove('is-drawing')
+  map.getContainer().style.cursor = ''
+}
 function clearPolygonLocations(polygon: Polygon) {
   polygon.found.forEach(marker => removeMarkerRecord(marker))
   polygon.found = []
@@ -1491,17 +1608,32 @@ function onKeyDown(event: KeyboardEvent) {
     event.preventDefault()
     toggleRun()
   }
-  if (event.code === 'Escape' && drawing.value) {
-    drawPoints.value = []
-    drawMarkers.value.forEach(dot => map.removeLayer(dot as any))
-    drawMarkers.value = []
-    if (drawLine.value) {
-      map.removeLayer(drawLine.value as any)
-      drawLine.value = null
+  if (event.code === 'Escape') {
+    if (drawing.value) {
+      cancelDrawing()
+      status.value = 'Drawing cancelled'
+    } else if (editing.value) {
+      cancelEdit()
+      status.value = 'Editing cancelled'
     }
-    drawing.value = false
-    map.doubleClickZoom.enable()
-    status.value = 'Drawing cancelled'
+  }
+  if (event.code === 'Enter' && editing.value) {
+    event.preventDefault()
+    finishEdit()
+  }
+  if (drawing.value && (event.code === 'Backspace' || event.code === 'Delete')) {
+    event.preventDefault()
+    if (drawPoints.value.length > 0) {
+      drawPoints.value.pop()
+      const dot = drawMarkers.value.pop()
+      if (dot) map.removeLayer(dot as any)
+      if (drawPoints.value.length === 0) {
+        if (drawLine.value) { map.removeLayer(drawLine.value as any); drawLine.value = null }
+      } else if (drawLine.value) {
+        drawLine.value.setLatLngs(drawPoints.value)
+      }
+      status.value = drawPoints.value.length ? `Drawing · ${drawPoints.value.length} vertices` : 'Click to place vertices · double-click to finish · Backspace to undo'
+    }
   }
 }
 
