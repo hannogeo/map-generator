@@ -3,20 +3,80 @@
 //! Runs random/grid strategies per polygon, applies the provider-neutral
 //! filters, dedupes panoramas globally by pano id and emits progress events
 //! to the frontend. Notifications and Discord webhooks are fired from here.
+//!
+//! Each generator keeps a fixed number of samples in flight instead of waiting
+//! for a whole batch, so a slow or empty response never stalls the pipeline.
+//! Settings, rings and marker snapshots are shared through `Arc`s rather than
+//! cloned per sample.
 
 use crate::filters::Filters;
-use crate::geo::{LatLng, PolyRings};
+use crate::geo::{GridGenerator, LatLng, PolyRings};
+use crate::land::is_land_near;
 use crate::models::{
     LocationEvent, Marker, PolygonDoneEvent, PolygonInput, ProgressEvent, Settings,
 };
-use crate::providers::{Providers};
+use crate::providers::Providers;
 use crate::tiles::BlueLineMask;
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
-use tokio::sync::Semaphore;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+/// Hard ceiling on simultaneous provider requests. The keyless Google endpoint
+/// plateaus around 128 in flight (roughly 900 requests/s); beyond that latency
+/// and memory grow without adding throughput.
+const MAX_CONCURRENCY: usize = 128;
+
+/// How many samples one generator keeps in flight. This is what the "Speed"
+/// setting controls, so the number of requests follows it directly.
+const MAX_PER_GENERATOR: usize = 128;
+
+/// Give up on the land mask after this many consecutive sea samples. Islands
+/// too small for the 0.05° mask would otherwise never produce points.
+const LAND_MASK_GIVE_UP: u32 = 4_000;
+
+struct RunContext {
+    app: AppHandle,
+    settings: Arc<Settings>,
+    providers: Arc<Providers>,
+    /// Panorama ids already taken (globally unique across polygons).
+    seen: Mutex<HashSet<String>>,
+    /// Markers found per polygon id, this run included.
+    counts: Mutex<HashMap<String, usize>>,
+    /// Goal per polygon id, used for the "all complete" notification.
+    needs: HashMap<String, usize>,
+    start: Instant,
+    semaphore: Semaphore,
+    stop: Arc<AtomicBool>,
+}
+
+struct PolyRuntime {
+    id: String,
+    rings: Arc<PolyRings>,
+    needed: usize,
+    /// Accepted coordinates, only maintained when region spacing is on.
+    found_points: Mutex<Vec<LatLng>>,
+}
+
+enum PointCheck {
+    Accept,
+    Reject,
+    /// Inside the polygon but on water.
+    Sea,
+}
+
+fn polygon_needed(polygon: &PolygonInput) -> usize {
+    if polygon.nb_needed == 0 {
+        1
+    } else {
+        polygon.nb_needed as usize
+    }
+}
 
 pub async fn run(
     app: AppHandle,
@@ -25,134 +85,108 @@ pub async fn run(
     providers: Arc<Providers>,
     stop: Arc<AtomicBool>,
 ) {
-    // Global dedupe set, seeded with any markers the frontend already had.
-    let global_seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-    let found_map: Arc<Mutex<HashMap<String, Vec<Marker>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let settings = Arc::new(settings);
+    let start = Instant::now();
+
+    let mut counts = HashMap::new();
+    let mut needs = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut runtimes: Vec<Arc<PolyRuntime>> = Vec::new();
+
     for polygon in &polygons {
-        found_map
-            .lock()
-            .unwrap()
-            .insert(polygon.id.clone(), polygon.found.clone());
+        let Some(rings) = PolyRings::from_geometry(&polygon.geometry) else {
+            continue;
+        };
+        let needed = polygon_needed(polygon);
+        counts.insert(polygon.id.clone(), polygon.found.len());
+        needs.insert(polygon.id.clone(), needed);
         for marker in &polygon.found {
-            global_seen.lock().unwrap().insert(marker.pano_id.clone());
+            seen.insert(marker.pano_id.clone());
         }
+        let found_points = if settings.find_regions {
+            polygon
+                .found
+                .iter()
+                .map(|marker| LatLng::new(marker.lat, marker.lng))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        runtimes.push(Arc::new(PolyRuntime {
+            id: polygon.id.clone(),
+            rings: Arc::new(rings),
+            needed,
+            found_points: Mutex::new(found_points),
+        }));
     }
 
-    let start_time = Instant::now();
-    let grid = settings.strategy == "grid";
-    let concurrency = Arc::new(Semaphore::new(16));
-
-    // Per-polygon goals, used to decide when everything is complete.
-    let needs: Arc<HashMap<String, usize>> = Arc::new(
-        polygons
-            .iter()
-            .map(|p| (p.id.clone(), if p.nb_needed == 0 { 1 } else { p.nb_needed as usize }))
-            .collect(),
-    );
-
-    // Build the list of generator tasks.
-    let mut specs: Vec<PolygonInput> = Vec::new();
-    if settings.one_country_at_a_time {
-        for polygon in &polygons {
-            specs.push(polygon.clone());
-        }
-    } else {
-        for polygon in &polygons {
-            let count = if grid {
-                1
-            } else {
-                settings.num_of_generators.clamp(1, 10)
-            };
-            for _ in 0..count {
-                specs.push(polygon.clone());
-            }
-        }
-    }
-
-    if settings.one_country_at_a_time {
-        for spec in specs {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            run_one(
-                app.clone(),
-                settings.clone(),
-                providers.clone(),
-                spec,
-                global_seen.clone(),
-                found_map.clone(),
-                stop.clone(),
-                start_time,
-                needs.clone(),
-                concurrency.clone(),
-            )
-            .await;
-        }
-    } else {
-        let mut handles = Vec::new();
-        for spec in specs {
-            let app = app.clone();
-            let settings = settings.clone();
-            let providers = providers.clone();
-            let global_seen = global_seen.clone();
-            let found_map = found_map.clone();
-            let stop = stop.clone();
-            let needs = needs.clone();
-            let concurrency = concurrency.clone();
-            handles.push(tokio::spawn(async move {
-                run_one(
-                    app,
-                    settings,
-                    providers,
-                    spec,
-                    global_seen,
-                    found_map,
-                    stop,
-                    start_time,
-                    needs,
-                    concurrency,
-                )
-                .await;
-            }));
-        }
-        for handle in handles {
-            let _ = handle.await;
-        }
-    }
-
-    let _ = app.emit("generation:finished", serde_json::json!({}));
-}
-
-async fn run_one(
-    app: AppHandle,
-    settings: Settings,
-    providers: Arc<Providers>,
-    polygon: PolygonInput,
-    global_seen: Arc<Mutex<HashSet<String>>>,
-    found_map: Arc<Mutex<HashMap<String, Vec<Marker>>>>,
-    stop: Arc<AtomicBool>,
-    start_time: Instant,
-    needs: Arc<HashMap<String, usize>>,
-    concurrency: Arc<Semaphore>,
-) {
-    let rings = match PolyRings::from_geometry(&polygon.geometry) {
-        Some(rings) => rings,
-        None => return,
-    };
-    let polygon_id = polygon.id.clone();
-    let needed = if polygon.nb_needed == 0 {
+    let per_polygon = if settings.one_country_at_a_time || settings.strategy == "grid" {
         1
     } else {
-        polygon.nb_needed as usize
+        settings.num_of_generators.clamp(1, 10)
+    };
+    let limit = if settings.find_regions {
+        // Region spacing is inherently sequential: one probe at a time.
+        per_polygon
+    } else {
+        settings
+            .speed
+            .max(1)
+            .saturating_mul(per_polygon)
+            .min(MAX_CONCURRENCY)
+    }
+    .max(1);
+
+    let ctx = Arc::new(RunContext {
+        app,
+        settings,
+        providers,
+        seen: Mutex::new(seen),
+        counts: Mutex::new(counts),
+        needs,
+        start,
+        semaphore: Semaphore::new(limit),
+        stop,
+    });
+
+    if ctx.settings.one_country_at_a_time {
+        for poly in runtimes {
+            if ctx.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            run_one(ctx.clone(), poly).await;
+        }
+    } else {
+        let mut running = FuturesUnordered::new();
+        for poly in runtimes {
+            for _ in 0..per_polygon {
+                running.push(run_one(ctx.clone(), poly.clone()));
+            }
+        }
+        while running.next().await.is_some() {}
+    }
+
+    let _ = ctx.app.emit("generation:finished", serde_json::json!({}));
+}
+
+/// Runs one generator until its polygon reaches the goal, the strategy is
+/// exhausted or the run is stopped.
+async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
+    let settings = &ctx.settings;
+    let radius = settings.effective_radius();
+    let needed = poly.needed;
+    let target = if settings.find_regions {
+        1
+    } else {
+        settings.speed.clamp(1, MAX_PER_GENERATOR)
     };
 
     let blue_mask = if settings.only_check_blue_lines {
         Some(
             BlueLineMask::build(
-                &providers,
-                crate::geo::LatLng::new(rings.bounds.north, rings.bounds.west),
-                crate::geo::LatLng::new(rings.bounds.south, rings.bounds.east),
+                &ctx.providers,
+                LatLng::new(poly.rings.bounds.north, poly.rings.bounds.west),
+                LatLng::new(poly.rings.bounds.south, poly.rings.bounds.east),
             )
             .await,
         )
@@ -160,345 +194,270 @@ async fn run_one(
         None
     };
 
-    let chunk_size = if settings.find_regions { 1usize } else { 75usize };
-
-    if settings.strategy == "grid" {
-        let mut grid = match crate::geo::GridGenerator::new(&rings, settings.effective_radius()) {
-            Ok(grid) => grid,
+    let mut grid = if settings.strategy == "grid" {
+        match GridGenerator::new(&poly.rings, radius) {
+            Ok(grid) => Some(grid),
             Err(_) => return,
-        };
-
-        'outer: loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            {
-                let fm = found_map.lock().unwrap();
-                if fm.get(&polygon_id).map(|v| v.len()).unwrap_or(0) >= needed {
-                    break;
-                }
-            }
-
-            let batch_size = (chunk_size * 2).max(150);
-            let mut batch: Vec<crate::geo::LatLng> = Vec::with_capacity(batch_size);
-            for _ in 0..batch_size {
-                match grid.next_point() {
-                    Some(pt) => {
-                        if let Some(mask) = &blue_mask {
-                            if !mask.contains(pt.lat, pt.lng, settings.radius) {
-                                continue;
-                            }
-                        }
-                        if !rings.contains(pt.lat, pt.lng) {
-                            continue;
-                        }
-                        batch.push(pt);
-                    }
-                    None => break,
-                }
-            }
-
-            if batch.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            }
-
-            for chunk in batch.chunks(chunk_size) {
-                if stop.load(Ordering::Relaxed) {
-                    break 'outer;
-                }
-                {
-                    let fm = found_map.lock().unwrap();
-                    if fm.get(&polygon_id).map(|v| v.len()).unwrap_or(0) >= needed {
-                        break 'outer;
-                    }
-                }
-
-                let found_lat_lngs: Vec<LatLng> = found_map
-                    .lock()
-                    .unwrap()
-                    .get(&polygon_id)
-                    .map(|v| v.iter().map(|m| LatLng::new(m.lat, m.lng)).collect())
-                    .unwrap_or_default();
-
-                let mut futs = Vec::with_capacity(chunk.len());
-                for pt in chunk {
-                    let settings = settings.clone();
-                    let providers = providers.clone();
-                    let rings = rings.clone();
-                    let global_seen = global_seen.clone();
-                    let stop = stop.clone();
-                    let concurrency = concurrency.clone();
-                    let pt = *pt;
-                    let found_lat_lngs = found_lat_lngs.clone();
-                    futs.push(tokio::spawn(async move {
-                        let _permit = concurrency.acquire().await.ok();
-                        if stop.load(Ordering::Relaxed) {
-                            return Vec::new();
-                        }
-                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs, &stop).await
-                    }));
-                }
-
-                for fut in futs {
-                    if stop.load(Ordering::Relaxed) {
-                        fut.abort();
-                        continue;
-                    }
-                    let Ok(markers) = fut.await else { continue };
-                    for marker in markers {
-                        add_marker(
-                            &app,
-                            &settings,
-                            &polygon_id,
-                            marker,
-                            &found_map,
-                            needed,
-                            &global_seen,
-                            start_time,
-                            &needs,
-                        )
-                        .await;
-                    }
-                }
-
-                emit_progress(&app, &polygon_id, &found_map, needed);
-            }
         }
     } else {
-        'outer: loop {
-            if stop.load(Ordering::Relaxed) {
+        None
+    };
+
+    let mut set: JoinSet<Vec<Marker>> = JoinSet::new();
+    let mut exhausted = false;
+    let mut sea_rejections = 0u32;
+    let mut skip_land_mask = false;
+
+    loop {
+        if ctx.stop.load(Ordering::Relaxed) || found_count(&ctx, &poly.id) >= needed {
+            break;
+        }
+
+        // Keep the pipeline full: top up to `target` samples in flight.
+        while set.len() < target && !exhausted {
+            if ctx.stop.load(Ordering::Relaxed) {
                 break;
             }
-            {
-                let fm = found_map.lock().unwrap();
-                if fm.get(&polygon_id).map(|v| v.len()).unwrap_or(0) >= needed {
-                    break;
-                }
-            }
-
-            let n = (needed * 100).min(settings.speed).max(1);
-            let mut random_coords: Vec<LatLng> = Vec::with_capacity(n);
-            while random_coords.len() < n {
-                if stop.load(Ordering::Relaxed) {
-                    break 'outer;
-                }
-                let pt = rings.random_point();
-                if !rings.contains(pt.lat, pt.lng) {
-                    continue;
-                }
-                if let Some(mask) = &blue_mask {
-                    if !mask.contains(pt.lat, pt.lng, settings.radius) {
-                        continue;
+            let mut point = None;
+            if let Some(generator) = grid.as_mut() {
+                while let Some(candidate) = generator.next_point() {
+                    if ctx.stop.load(Ordering::Relaxed) {
+                        break;
                     }
-                }
-                random_coords.push(pt);
-            }
-
-            for chunk in random_coords.chunks(chunk_size) {
-                if stop.load(Ordering::Relaxed) {
-                    break 'outer;
-                }
-                {
-                    let fm = found_map.lock().unwrap();
-                    if fm.get(&polygon_id).map(|v| v.len()).unwrap_or(0) >= needed {
-                        break 'outer;
-                    }
-                }
-
-                let found_lat_lngs: Vec<LatLng> = found_map
-                    .lock()
-                    .unwrap()
-                    .get(&polygon_id)
-                    .map(|v| v.iter().map(|m| LatLng::new(m.lat, m.lng)).collect())
-                    .unwrap_or_default();
-
-                let mut futs = Vec::with_capacity(chunk.len());
-                for pt in chunk {
-                    let settings = settings.clone();
-                    let providers = providers.clone();
-                    let rings = rings.clone();
-                    let global_seen = global_seen.clone();
-                    let stop = stop.clone();
-                    let concurrency = concurrency.clone();
-                    let pt = *pt;
-                    let found_lat_lngs = found_lat_lngs.clone();
-                    futs.push(tokio::spawn(async move {
-                        let _permit = concurrency.acquire().await.ok();
-                        if stop.load(Ordering::Relaxed) {
-                            return Vec::new();
+                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, skip_land_mask) {
+                        PointCheck::Accept => {
+                            point = Some(candidate);
+                            break;
                         }
-                        process_sample(&settings, &providers, &rings, pt.lat, pt.lng, &global_seen, &found_lat_lngs, &stop).await
-                    }));
-                }
-
-                for fut in futs {
-                    if stop.load(Ordering::Relaxed) {
-                        fut.abort();
-                        continue;
-                    }
-                    let Ok(markers) = fut.await else { continue };
-                    for marker in markers {
-                        add_marker(
-                            &app,
-                            &settings,
-                            &polygon_id,
-                            marker,
-                            &found_map,
-                            needed,
-                            &global_seen,
-                            start_time,
-                            &needs,
-                        )
-                        .await;
+                        // The grid is finite, so sea cells are simply skipped.
+                        PointCheck::Reject | PointCheck::Sea => continue,
                     }
                 }
-
-                emit_progress(&app, &polygon_id, &found_map, needed);
+                if point.is_none() {
+                    exhausted = true;
+                }
+            } else {
+                let mut tries = 0u32;
+                while tries < 200_000 {
+                    tries += 1;
+                    if ctx.stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let candidate = poly.rings.random_point();
+                    match check_point(&poly, blue_mask.as_ref(), radius, candidate, skip_land_mask) {
+                        PointCheck::Accept => {
+                            sea_rejections = 0;
+                            point = Some(candidate);
+                            break;
+                        }
+                        PointCheck::Sea => {
+                            sea_rejections += 1;
+                            if sea_rejections >= LAND_MASK_GIVE_UP {
+                                skip_land_mask = true;
+                            }
+                        }
+                        PointCheck::Reject => {}
+                    }
+                }
+                if point.is_none() {
+                    exhausted = true;
+                }
             }
+
+            let Some(point) = point else { break };
+            let task_ctx = ctx.clone();
+            let task_poly = poly.clone();
+            set.spawn(async move {
+                let _permit = task_ctx.semaphore.acquire().await.ok();
+                if task_ctx.stop.load(Ordering::Relaxed) {
+                    return Vec::new();
+                }
+                let found = if task_ctx.settings.find_regions {
+                    task_poly
+                        .found_points
+                        .lock()
+                        .map(|points| points.clone())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                process_sample(&task_ctx, &task_poly, point, &found).await
+            });
+        }
+
+        let Some(joined) = set.join_next().await else {
+            break;
+        };
+        // A cancelled or panicked sample must not kill the run.
+        let Ok(markers) = joined else { continue };
+        for marker in markers {
+            try_add_marker(&ctx, &poly, needed, marker).await;
         }
     }
 
-    // Polygon done event.
-    let found_len = found_map
-        .lock()
-        .unwrap()
-        .get(&polygon_id)
-        .map(|v| v.len())
-        .unwrap_or(0);
-    if found_len >= needed {
-        let _ = app.emit(
+    set.abort_all();
+    while set.join_next().await.is_some() {}
+
+    let found = found_count(&ctx, &poly.id);
+    if found >= needed {
+        let _ = ctx.app.emit(
             "generation:polygon-done",
             PolygonDoneEvent {
-                polygon_id: polygon_id.clone(),
-                found: found_len,
+                polygon_id: poly.id.clone(),
+                found,
                 needed,
             },
         );
     }
 }
 
+fn found_count(ctx: &RunContext, polygon_id: &str) -> usize {
+    ctx.counts
+        .lock()
+        .map(|counts| counts.get(polygon_id).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+fn check_point(
+    poly: &PolyRuntime,
+    blue_mask: Option<&BlueLineMask>,
+    radius: f64,
+    point: LatLng,
+    skip_land_mask: bool,
+) -> PointCheck {
+    if !poly.rings.contains(point.lat, point.lng) {
+        return PointCheck::Reject;
+    }
+    if let Some(mask) = blue_mask {
+        if !mask.contains(point.lat, point.lng, radius) {
+            return PointCheck::Reject;
+        }
+    }
+    if !skip_land_mask && !is_land_near(point.lat, point.lng) {
+        return PointCheck::Sea;
+    }
+    PointCheck::Accept
+}
+
 async fn process_sample(
-    settings: &Settings,
-    providers: &Providers,
-    rings: &PolyRings,
-    lat: f64,
-    lng: f64,
-    global_seen: &Mutex<HashSet<String>>,
-    found_lat_lngs: &[LatLng],
-    stop: &AtomicBool,
+    ctx: &RunContext,
+    poly: &PolyRuntime,
+    point: LatLng,
+    found: &[LatLng],
 ) -> Vec<Marker> {
-    if stop.load(Ordering::Relaxed) {
+    if ctx.stop.load(Ordering::Relaxed) {
         return Vec::new();
     }
-    let filters = Filters::new(settings, providers, rings);
-    let candidates = filters.candidates(lat, lng, found_lat_lngs).await;
+    let filters = Filters::new(&ctx.settings, &ctx.providers, &poly.rings);
+    let candidates = filters.candidates(point.lat, point.lng, found).await;
     let mut out = Vec::new();
     for pano in candidates {
         {
-            let mut seen = global_seen.lock().unwrap();
+            let Ok(mut seen) = ctx.seen.lock() else {
+                continue;
+            };
             if !seen.insert(pano.pano_id.clone()) {
                 continue;
             }
         }
-        let marker = filters.build_marker(&pano).await;
-        out.push(marker);
+        out.push(filters.build_marker(&pano).await);
     }
     out
 }
 
-async fn add_marker(
-    app: &AppHandle,
-    settings: &Settings,
-    polygon_id: &str,
-    marker: Marker,
-    found_map: &Arc<Mutex<HashMap<String, Vec<Marker>>>>,
+async fn try_add_marker(
+    ctx: &RunContext,
+    poly: &PolyRuntime,
     needed: usize,
-    _global_seen: &Arc<Mutex<HashSet<String>>>,
-    start_time: Instant,
-    needs: &Arc<HashMap<String, usize>>,
-) {
+    marker: Marker,
+) -> Option<usize> {
     let (found_len, all_complete) = {
-        let mut fm = found_map.lock().unwrap();
-        let vec = fm.entry(polygon_id.to_string()).or_default();
-        if vec.len() >= needed {
-            return;
+        let mut counts = ctx.counts.lock().ok()?;
+        let entry = counts.get_mut(poly.id.as_str())?;
+        if *entry >= needed {
+            return None;
         }
-        if vec.iter().any(|m| m.pano_id == marker.pano_id) {
-            return;
-        }
-        vec.push(marker.clone());
-        let all_complete = needs
+        *entry += 1;
+        let found_len = *entry;
+        let all_complete = ctx
+            .needs
             .iter()
-            .all(|(id, need)| fm.get(id).map(|v| v.len()).unwrap_or(0) >= *need);
-        (fm.get(polygon_id).map(|v| v.len()).unwrap_or(0), all_complete)
+            .all(|(id, need)| counts.get(id).copied().unwrap_or(0) >= *need);
+        (found_len, all_complete)
     };
 
-    let _ = app.emit(
+    if ctx.settings.find_regions {
+        if let Ok(mut points) = poly.found_points.lock() {
+            points.push(LatLng::new(marker.lat, marker.lng));
+        }
+    }
+
+    let _ = ctx.app.emit(
         "generation:location",
         LocationEvent {
-            polygon_id: polygon_id.to_string(),
+            polygon_id: poly.id.clone(),
             location: marker.clone(),
         },
     );
-    let _ = app.emit(
+    let _ = ctx.app.emit(
         "generation:progress",
         ProgressEvent {
-            polygon_id: polygon_id.to_string(),
+            polygon_id: poly.id.clone(),
             found: found_len,
             needed,
         },
     );
 
-    if settings.notification.enabled {
-        let elapsed = start_time.elapsed().as_secs_f64();
+    if ctx.settings.notification.enabled {
+        let elapsed = ctx.start.elapsed().as_secs_f64();
         let elapsed_str = format!("{:.1}", elapsed);
         let is_no_blue = marker.update_type.as_deref() == Some("noblueline");
-        if settings.notification.any_location && found_len == 1 {
+        let discord = ctx.settings.notification.send_to_discord
+            && ctx.settings.provider.contains("google");
+        let notification = &ctx.settings.notification;
+        if notification.any_location && found_len == 1 {
             send_notification(
-                app,
-                settings,
+                &ctx.app,
+                &ctx.settings,
                 "Location Found",
                 &format!("Found first location ({}s)", elapsed_str),
-                &marker,
-                settings.notification.send_to_discord && settings.provider.contains("google"),
+                discord,
             )
             .await;
         }
-        if settings.notification.any_no_blue_line && is_no_blue && found_len == 1 {
+        if notification.any_no_blue_line && is_no_blue && found_len == 1 {
             send_notification(
-                app,
-                settings,
+                &ctx.app,
+                &ctx.settings,
                 "No blue line Location Found",
                 &format!("No blue line location ({}s)", elapsed_str),
-                &marker,
-                settings.notification.send_to_discord && settings.provider.contains("google"),
+                discord,
             )
             .await;
         }
-        if settings.notification.one_polygon_complete && found_len >= needed {
+        if notification.one_polygon_complete && found_len >= needed {
             send_notification(
-                app,
-                settings,
+                &ctx.app,
+                &ctx.settings,
                 "Polygon Completed",
                 &format!("Polygon has reached its goal ({}s)", elapsed_str),
-                &marker,
-                settings.notification.send_to_discord && settings.provider.contains("google"),
+                discord,
             )
             .await;
         }
-        if settings.notification.all_polygons_complete && all_complete {
+        if notification.all_polygons_complete && all_complete {
             send_notification(
-                app,
-                settings,
+                &ctx.app,
+                &ctx.settings,
                 "Generation Completed",
                 &format!("All polygons have reached their goals ({}s)", elapsed_str),
-                &marker,
-                settings.notification.send_to_discord && settings.provider.contains("google"),
+                discord,
             )
             .await;
         }
     }
+
+    Some(found_len)
 }
 
 async fn send_notification(
@@ -506,7 +465,6 @@ async fn send_notification(
     settings: &Settings,
     title: &str,
     body: &str,
-    _marker: &Marker,
     discord: bool,
 ) {
     let _ = app.notification().builder().title(title).body(body).show();
@@ -520,21 +478,4 @@ async fn send_notification(
                 .await;
         }
     }
-}
-
-fn emit_progress(app: &AppHandle, polygon_id: &str, found_map: &Arc<Mutex<HashMap<String, Vec<Marker>>>>, needed: usize) {
-    let found = found_map
-        .lock()
-        .unwrap()
-        .get(polygon_id)
-        .map(|v| v.len())
-        .unwrap_or(0);
-    let _ = app.emit(
-        "generation:progress",
-        ProgressEvent {
-            polygon_id: polygon_id.to_string(),
-            found,
-            needed,
-        },
-    );
 }

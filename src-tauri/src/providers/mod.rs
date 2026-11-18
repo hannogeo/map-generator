@@ -119,6 +119,10 @@ impl Providers {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(10))
+            // Generation keeps up to 128 requests in flight; keep their
+            // connections warm instead of reconnecting for every sample.
+            .pool_max_idle_per_host(160)
+            .tcp_nodelay(true)
             .user_agent(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
                  (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

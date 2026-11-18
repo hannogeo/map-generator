@@ -1,8 +1,9 @@
 //! Google Street View via the internal Maps JS RPC endpoints.
 //!
-//! These are the same keyless endpoints the browser reference uses: a spatial
-//! search (`SingleImageSearch`) followed by `GetMetadata`. Parsing follows the
-//! reference `parseGoogle` implementation field by field.
+//! These are the same keyless endpoints the browser reference uses. A spatial
+//! search (`SingleImageSearch`) returns the complete panorama record, so no
+//! follow-up `GetMetadata` request is needed. Parsing follows the reference
+//! `parseGoogle` implementation field by field.
 
 use super::{
     as_f64, as_str, idx, month_string, post_json, FetchResult, PanoRequest, Providers,
@@ -28,21 +29,28 @@ pub async fn fetch(providers: &Providers, req: &PanoRequest) -> FetchResult {
     let Some(root) = search(providers, lat, lng, req.radius, req.official_only).await else {
         return FetchResult::zero();
     };
-    let inferred = parse_root(&root).map(|pano| pano.pano_id);
-    let Some(pano_id) = inferred else {
-        return FetchResult::zero();
-    };
-    // Search responses are lighter than metadata; fetch the full record so that
-    // history, links and address fields are always present.
-    match metadata(providers, &pano_id).await {
-        Some(full) => match parse_root(&full) {
-            Some(pano) => FetchResult::ok(pano),
-            None => FetchResult::zero(),
-        },
-        None => match parse_root(&root) {
-            Some(pano) => FetchResult::ok(pano),
+    // The spatial search already returns the full panorama record: location,
+    // links, address and history match `GetMetadata` field for field (only the
+    // unused entitlement token differs). Skipping the second round trip halves
+    // the traffic per sample.
+    if let Some(pano) = parse_root(&root) {
+        return FetchResult::ok(pano);
+    }
+    // Older/newer response shapes may not parse directly; fall back to the
+    // metadata endpoint for the panorama the search points at.
+    let pano_id = idx(&root, 1)
+        .get(1)
+        .and_then(|value| value.as_str())
+        .map(|id| id.to_string());
+    match pano_id {
+        Some(id) => match metadata(providers, &id).await {
+            Some(full) => match parse_root(&full) {
+                Some(pano) => FetchResult::ok(pano),
+                None => FetchResult::zero(),
+            },
             None => FetchResult::error(),
         },
+        None => FetchResult::zero(),
     }
 }
 
