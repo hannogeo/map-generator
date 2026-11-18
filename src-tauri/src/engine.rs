@@ -57,6 +57,7 @@ struct RunContext {
 
 struct PolyRuntime {
     id: String,
+    name: String,
     rings: Arc<PolyRings>,
     needed: usize,
     /// Accepted coordinates, only maintained when region spacing is on.
@@ -114,6 +115,7 @@ pub async fn run(
         };
         runtimes.push(Arc::new(PolyRuntime {
             id: polygon.id.clone(),
+            name: polygon.name.clone(),
             rings: Arc::new(rings),
             needed,
             found_points: Mutex::new(found_points),
@@ -416,21 +418,37 @@ async fn try_add_marker(
             && ctx.settings.provider.contains("google");
         let notification = &ctx.settings.notification;
         if notification.any_location && found_len == 1 {
+            let link = format!(
+                "https://www.google.com/maps/@?api=1&map_action=pano&pano={}&heading={}&pitch={}&fov={}",
+                marker.pano_id,
+                marker.heading,
+                marker.pitch,
+                180.0 / 2.0_f64.powf(marker.zoom)
+            );
             send_notification(
                 &ctx.app,
                 &ctx.settings,
-                "Location Found",
-                &format!("Found first location ({}s)", elapsed_str),
+                &format!("First location found in {} ({}s)", poly.name, elapsed_str),
+                "",
+                Some(&link),
                 discord,
             )
             .await;
         }
         if notification.any_no_blue_line && is_no_blue && found_len == 1 {
+            let link = format!(
+                "https://www.google.com/maps/@?api=1&map_action=pano&pano={}&heading={}&pitch={}&fov={}",
+                marker.pano_id,
+                marker.heading,
+                marker.pitch,
+                180.0 / 2.0_f64.powf(marker.zoom)
+            );
             send_notification(
                 &ctx.app,
                 &ctx.settings,
-                "No blue line Location Found",
-                &format!("No blue line location ({}s)", elapsed_str),
+                &format!("No blue line location found in {} ({}s)", poly.name, elapsed_str),
+                "",
+                Some(&link),
                 discord,
             )
             .await;
@@ -441,6 +459,7 @@ async fn try_add_marker(
                 &ctx.settings,
                 "Polygon Completed",
                 &format!("Polygon has reached its goal ({}s)", elapsed_str),
+                None,
                 discord,
             )
             .await;
@@ -451,6 +470,7 @@ async fn try_add_marker(
                 &ctx.settings,
                 "Generation Completed",
                 &format!("All polygons have reached their goals ({}s)", elapsed_str),
+                None,
                 discord,
             )
             .await;
@@ -465,15 +485,21 @@ async fn send_notification(
     settings: &Settings,
     title: &str,
     body: &str,
+    link: Option<&str>,
     discord: bool,
 ) {
     let _ = app.notification().builder().title(title).body(body).show();
     if discord {
         if let Some(url) = settings.notification.discord_webhook.clone() {
             let client = reqwest::Client::new();
+            let content = match link {
+                Some(l) if body.is_empty() => format!("**{}**\n{}", title, l),
+                Some(l) => format!("**{}**\n{}\n{}", title, body, l),
+                None => format!("**{}**\n{}", title, body),
+            };
             let _ = client
                 .post(url)
-                .json(&serde_json::json!({"content": format!("**{}**\n{}", title, body)}))
+                .json(&serde_json::json!({"content": content}))
                 .send()
                 .await;
         }
