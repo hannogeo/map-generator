@@ -31,6 +31,13 @@ h1 { font-size: 40px; line-height: 1.15; margin: 0 0 16px; letter-spacing: -0.02
 
 .features { padding: 48px 0; }
 .performance { padding: 0 0 16px; }
+.performance p { color: var(--muted); }
+.perf-table { width: 100%; border-collapse: collapse; margin: 16px 0 12px; font-size: 14px; }
+.perf-table th, .perf-table td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+.perf-table th { background: var(--panel); color: var(--ink); font-weight: 700; }
+.perf-table td { color: var(--muted); }
+.perf-table td:first-child { color: var(--ink); }
+.perf-note { color: var(--muted); font-size: 13px; }
 .providers, .install { padding: 24px 0 48px; border-bottom: 1px solid var(--border); }
 h2 { font-size: 26px; margin: 0 0 20px; letter-spacing: -0.01em; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
