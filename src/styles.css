@@ -181,7 +181,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   margin-left: 2px;
 }
 .body {
-  padding: 6px 8px 7px;
+  padding: 6px 8px 4px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -302,7 +302,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .toolbar .tool.danger { background: #3a2323; border-color: #573333; color: #f0cdcd; }
 .toolbar .tool:disabled { opacity: .4; cursor: not-allowed; }
 
-.empty-state { padding: 14px 12px; border: 1px dashed var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); }
+.empty-state { margin-top: 4px; margin-bottom: 0; padding: 8px 12px 6px; border: 1px dashed var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); }
 .empty-title { color: var(--ink); font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .empty-text { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .saved-list { max-height: 220px; gap: 6px; }

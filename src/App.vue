@@ -148,7 +148,7 @@
                     <span>Goal</span>
                     <input type="number" min="0" v-model.number="p.nbNeeded" @change="onGoalChange(p)" />
                   </label>
-                  <span class="area-count">{{ p.found.length }} found</span>
+                  <span class="area-count">{{ p.found.length }} / {{ p.nbNeeded }}</span>
                 </div>
                 <div class="area-actions">
                   <button class="chip" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
