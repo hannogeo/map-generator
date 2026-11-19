@@ -167,9 +167,17 @@
         <details class="section" open>
           <summary>Saved polygons <span class="badge">{{ savedPolygons.length }}</span></summary>
           <div class="body">
+            <div class="search-wrap" v-if="savedPolygons.length">
+              <input
+                type="text"
+                v-model="savedPolygonQuery"
+                placeholder="Search saved polygons…"
+                @keydown.esc="savedPolygonQuery = ''"
+              />
+            </div>
             <div class="hint" v-if="!savedPolygons.length">No saved polygons yet. Draw or import one, then use Save.</div>
-            <div class="area-list saved-list" v-else>
-              <div class="area-card saved-card" v-for="sp in savedPolygons" :key="sp.id">
+            <div class="area-list saved-list" v-else-if="filteredSavedPolygons.length">
+              <div class="area-card saved-card" v-for="sp in filteredSavedPolygons" :key="sp.id">
                 <div class="area-head">
                   <span class="area-name" :title="sp.name" @click="renameSavedPolygon(sp)">{{ sp.name }}</span>
                 </div>
@@ -179,6 +187,7 @@
                 </div>
               </div>
             </div>
+            <div class="hint" v-else>No matches</div>
           </div>
         </details>
 
@@ -507,6 +516,7 @@
         <div class="modal-title">Save polygon</div>
         <div class="modal-body">
           <input v-model="saveName" type="text" placeholder="Polygon name" @keydown.enter.prevent="confirmSavePolygon" />
+          <div v-if="saveError" class="modal-error">{{ saveError }}</div>
         </div>
         <div class="modal-actions">
           <button @click="cancelSavePolygon">Cancel</button>
@@ -520,6 +530,7 @@
         <div class="modal-title">Rename polygon</div>
         <div class="modal-body">
           <input v-model="renameName" type="text" placeholder="Polygon name" @keydown.enter.prevent="confirmRename" />
+          <div v-if="renameError" class="modal-error">{{ renameError }}</div>
         </div>
         <div class="modal-actions">
           <button @click="cancelRename">Cancel</button>
@@ -1325,6 +1336,7 @@ function renamePolygon(polygon: Polygon) {
   renameSessionPolygon.value = polygon
   renameSavedPolygonTarget.value = null
   renameName.value = polygon.name
+  renameError.value = ''
   renameOpen.value = true
 }
 
@@ -1332,6 +1344,7 @@ function renameSavedPolygon(saved: any) {
   renameSessionPolygon.value = null
   renameSavedPolygonTarget.value = saved
   renameName.value = saved.name
+  renameError.value = ''
   renameOpen.value = true
 }
 
@@ -1340,10 +1353,19 @@ function cancelRename() {
   renameSessionPolygon.value = null
   renameSavedPolygonTarget.value = null
   renameName.value = ''
+  renameError.value = ''
 }
 
 function confirmRename() {
   const name = renameName.value.trim()
+  if (renameSavedPolygonTarget.value && name) {
+    const duplicate = savedPolygons.value.some(item =>
+      item !== renameSavedPolygonTarget.value && String(item.name).toLowerCase() === name.toLowerCase())
+    if (duplicate) {
+      renameError.value = `A saved polygon named "${name}" already exists`
+      return
+    }
+  }
   if (renameSessionPolygon.value) {
     if (name) renameSessionPolygon.value.name = name
     persistPolygons()
@@ -1369,6 +1391,7 @@ function removePolygon(id: string) {
 function askSavePolygon(polygon: Polygon) {
   polygonToSave.value = polygon
   saveName.value = polygon.name
+  saveError.value = ''
   savePolyOpen.value = true
 }
 
@@ -1376,11 +1399,16 @@ function cancelSavePolygon() {
   savePolyOpen.value = false
   polygonToSave.value = null
   saveName.value = ''
+  saveError.value = ''
 }
 
 function confirmSavePolygon() {
   if (!polygonToSave.value) return
   const name = saveName.value.trim() || polygonToSave.value.name
+  if (savedPolygons.value.some(item => String(item.name).toLowerCase() === name.toLowerCase())) {
+    saveError.value = `A saved polygon named "${name}" already exists`
+    return
+  }
   savedPolygons.value.push({
     id: `saved-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name,
@@ -1674,18 +1702,27 @@ const clearAllOpen = ref(false)
 const removePolyOpen = ref(false)
 const polygonToRemove = ref<Polygon | null>(null)
 const savedPolygons = ref<any[]>([])
+const savedPolygonQuery = ref('')
 const savePolyOpen = ref(false)
 const polygonToSave = ref<Polygon | null>(null)
 const saveName = ref('')
+const saveError = ref('')
 const renameOpen = ref(false)
 const renameName = ref('')
 const renameSessionPolygon = ref<Polygon | null>(null)
 const renameSavedPolygonTarget = ref<any>(null)
+const renameError = ref('')
 const deleteSavedOpen = ref(false)
 const savedPolygonToDelete = ref<any>(null)
 const exportNotice = ref('')
 const copying = ref(false)
 let exportNoticeTimer: number | undefined
+
+const filteredSavedPolygons = computed(() => {
+  const query = savedPolygonQuery.value.trim().toLowerCase()
+  if (!query) return savedPolygons.value
+  return savedPolygons.value.filter(item => String(item.name || '').toLowerCase().includes(query))
+})
 
 /** "1 location" / "24 locations". */
 function locationCount(count: number) {
