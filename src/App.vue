@@ -100,7 +100,7 @@
         </details>
 
         <details class="section" open>
-          <summary>Countries / territories <span class="badge">{{ polygons.length }}</span></summary>
+          <summary>Selected areas <span class="badge">{{ polygons.length }}</span></summary>
           <div class="body">
             <div class="search-wrap">
               <input
@@ -119,30 +119,65 @@
                 <div class="hint" v-if="!countryMatches.length">No matches</div>
               </div>
             </div>
-            <div class="actions">
-              <button @mousedown.prevent @click="toggleDraw">{{ drawing ? 'Finish drawing' : (editing ? 'Finish editing' : 'Draw polygon') }}</button>
-              <button v-if="drawing" @mousedown.prevent @click="removeLastDrawPoint" :disabled="!drawPoints.length">Remove last point</button>
-              <button v-if="editing" @mousedown.prevent @click="cancelEdit()">Cancel edit</button>
-              <button @mousedown.prevent @click="importGeoJson">Import GeoJSON</button>
-              <button @mousedown.prevent @click="clearPolygons">Deselect all</button>
+            <div class="toolbar">
+              <button class="tool primary" @mousedown.prevent @click="toggleDraw">
+                {{ drawing ? 'Finish drawing' : (editing ? 'Finish editing' : 'Draw') }}
+              </button>
+              <button v-if="drawing" class="tool" @mousedown.prevent @click="removeLastDrawPoint" :disabled="!drawPoints.length">Undo point</button>
+              <button v-if="editing" class="tool" @mousedown.prevent @click="cancelEdit()">Cancel edit</button>
+              <button class="tool" @mousedown.prevent @click="importGeoJson">Import</button>
+              <button class="tool danger" @mousedown.prevent @click="clearPolygons" :disabled="!polygons.length">Deselect all</button>
             </div>
-            <div class="hint" v-if="!polygons.length" style="margin-top: 2px">Click countries on the map, search above, or draw your own polygon.</div>
-            <div class="polygon-list" v-else>
-              <div class="polygon-row" v-for="p in polygons" :key="p.id">
-                <span class="polygon-name" :title="p.name" @click="pickCountry(Number(p.id.replace('country-','')))" >{{ p.name }}</span>
-                <span class="polygon-count">
-                  {{ p.found.length }} /
-                  <input type="number" min="0" v-model.number="p.nbNeeded" @change="onGoalChange(p)" />
-                </span>
-                <div class="row-actions">
-                  <button class="icon" title="Clear locations" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
-                  <button class="icon" title="Edit polygon" v-if="p.id.startsWith('poly-')" @click="startEdit(p)">Edit</button>
-                  <button class="icon danger" :title="p.id.startsWith('poly-') ? 'Remove polygon' : 'Remove country'" @click="askRemovePolygon(p)">×</button>
+
+            <div class="empty-state" v-if="!polygons.length">
+              <div class="empty-title">No areas selected</div>
+              <div class="empty-text">Click a country on the map, search above, or draw your own polygon.</div>
+            </div>
+
+            <div class="area-list" v-else>
+              <div class="area-card" v-for="p in polygons" :key="p.id">
+                <div class="area-head">
+                  <span class="area-flag" v-if="p.countryCode">
+                    <img class="flag" :src="flagUrl(p.countryCode)" :alt="p.countryCode" @error="onFlagError" />
+                    <span class="flag-code">{{ p.countryCode }}</span>
+                  </span>
+                  <span class="area-name" :title="p.name" @click="p.id.startsWith('poly-') ? renamePolygon(p) : pickCountry(Number(p.id.replace('country-','')))" >{{ p.name }}</span>
+                </div>
+                <div class="area-body">
+                  <label class="goal-field">
+                    <span>Goal</span>
+                    <input type="number" min="0" v-model.number="p.nbNeeded" @change="onGoalChange(p)" />
+                  </label>
+                  <span class="area-count">{{ p.found.length }} found</span>
+                </div>
+                <div class="area-actions">
+                  <button class="chip" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
+                  <button class="chip" v-if="p.id.startsWith('poly-')" @click="askSavePolygon(p)">Save</button>
+                  <button class="chip" v-if="p.id.startsWith('poly-')" @click="startEdit(p)">Edit</button>
+                  <button class="chip danger" @click="askRemovePolygon(p)">{{ p.id.startsWith('poly-') ? 'Delete' : 'Remove' }}</button>
                 </div>
               </div>
             </div>
             <div class="actions" v-if="markers.length">
               <button class="danger clear-all" @click="askClearAllLocations">Clear all locations</button>
+            </div>
+          </div>
+        </details>
+
+        <details class="section" open>
+          <summary>Saved polygons <span class="badge">{{ savedPolygons.length }}</span></summary>
+          <div class="body">
+            <div class="hint" v-if="!savedPolygons.length">No saved polygons yet. Draw or import one, then use Save.</div>
+            <div class="area-list saved-list" v-else>
+              <div class="area-card saved-card" v-for="sp in savedPolygons" :key="sp.id">
+                <div class="area-head">
+                  <span class="area-name" :title="sp.name" @click="renameSavedPolygon(sp)">{{ sp.name }}</span>
+                </div>
+                <div class="area-actions">
+                  <button class="chip" @click="loadSavedPolygon(sp)">Load</button>
+                  <button class="chip danger" @click="askDeleteSavedPolygon(sp)">Delete</button>
+                </div>
+              </div>
             </div>
           </div>
         </details>
@@ -467,6 +502,45 @@
       </div>
     </div>
 
+    <div v-if="savePolyOpen" class="modal-backdrop" @click="cancelSavePolygon">
+      <div class="modal" @click.stop>
+        <div class="modal-title">Save polygon</div>
+        <div class="modal-body">
+          <input v-model="saveName" type="text" placeholder="Polygon name" @keydown.enter.prevent="confirmSavePolygon" />
+        </div>
+        <div class="modal-actions">
+          <button @click="cancelSavePolygon">Cancel</button>
+          <button class="primary" @click="confirmSavePolygon">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="renameOpen" class="modal-backdrop" @click="cancelRename">
+      <div class="modal" @click.stop>
+        <div class="modal-title">Rename polygon</div>
+        <div class="modal-body">
+          <input v-model="renameName" type="text" placeholder="Polygon name" @keydown.enter.prevent="confirmRename" />
+        </div>
+        <div class="modal-actions">
+          <button @click="cancelRename">Cancel</button>
+          <button class="primary" @click="confirmRename">Rename</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="deleteSavedOpen" class="modal-backdrop" @click="cancelDeleteSavedPolygon">
+      <div class="modal" @click.stop>
+        <div class="modal-title">Delete saved polygon?</div>
+        <div class="modal-body">
+          This removes <strong>{{ savedPolygonToDelete?.name }}</strong> from your saved polygons. It does not affect polygons currently on the map.
+        </div>
+        <div class="modal-actions">
+          <button @click="cancelDeleteSavedPolygon">Cancel</button>
+          <button class="danger" @click="confirmDeleteSavedPolygon">Delete</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="updateAvailable" class="update-banner">
       <span>Update {{ updateVersion }} available</span>
       <div class="update-progress" v-if="updating">
@@ -550,6 +624,7 @@ const runElapsed = ref(0)
 /** Marks the live page so a reload can be recognised as a refresh. */
 const SESSION_KEY = 'mg:session'
 const POLYGONS_KEY = 'mg:polygons'
+const SAVED_POLYGONS_KEY = 'mg:saved-polygons'
 let runStartedAt = 0
 let elapsedTimer: number | undefined
 const status = ref('Ready')
@@ -715,6 +790,7 @@ onMounted(async () => {
   map.on('dblclick', onDblClick)
 
   await loadCountries()
+  loadSavedPolygonsLibrary()
   if (refreshed) {
     // Drop the snapshots the previous page wrote, so nothing is restored.
     try {
@@ -851,6 +927,7 @@ function writePolygons() {
       geometry: p.geometry,
       nbNeeded: p.nbNeeded,
       found: p.found,
+      countryCode: p.countryCode,
     }))
     localStorage.setItem(POLYGONS_KEY, JSON.stringify(slim))
   } catch {}
@@ -869,9 +946,10 @@ async function loadSavedPolygons() {
         geometry: polygon.geometry,
         nbNeeded: polygon.nbNeeded ?? 1000,
         found: [],
+        countryCode: polygon.countryCode,
       })
       const record = polygons.value[polygons.value.length - 1]
-      if (polygon.id?.startsWith('poly-')) addCustomLayer(polygon)
+      if (!polygon.id?.startsWith('country-')) addCustomLayer(polygon)
       for (const marker of polygon.found || []) {
         marker.polygonId = polygon.id
         seenMarkers.add(`${marker.panoId ?? ''}|${marker.source ?? ''}`)
@@ -885,6 +963,23 @@ async function loadSavedPolygons() {
   } catch (error) {
     console.warn('failed to load saved polygons', error)
   }
+}
+
+function loadSavedPolygonsLibrary() {
+  try {
+    const raw = localStorage.getItem(SAVED_POLYGONS_KEY)
+    if (!raw) return
+    const saved = JSON.parse(raw)
+    if (Array.isArray(saved)) savedPolygons.value = saved
+  } catch (error) {
+    console.warn('failed to load saved polygons library', error)
+  }
+}
+
+function persistSavedPolygons() {
+  try {
+    localStorage.setItem(SAVED_POLYGONS_KEY, JSON.stringify(savedPolygons.value))
+  } catch {}
 }
 
 function providerLabel(provider: string) {
@@ -1082,6 +1177,7 @@ function toggleCountryByIndex(index: number) {
       geometry: feature.geometry,
       nbNeeded: 1000,
       found: [],
+      countryCode: feature.properties?.code,
     })
   }
   refreshCountryStyles()
@@ -1222,7 +1318,42 @@ function confirmRemovePolygon() {
 
 function restoreCustomLayers() {
   customLayer.clearLayers()
-  polygons.value.filter(p => p.id.startsWith('poly-')).forEach(addCustomLayer)
+  polygons.value.filter(p => !p.id.startsWith('country-')).forEach(addCustomLayer)
+}
+
+function renamePolygon(polygon: Polygon) {
+  renameSessionPolygon.value = polygon
+  renameSavedPolygonTarget.value = null
+  renameName.value = polygon.name
+  renameOpen.value = true
+}
+
+function renameSavedPolygon(saved: any) {
+  renameSessionPolygon.value = null
+  renameSavedPolygonTarget.value = saved
+  renameName.value = saved.name
+  renameOpen.value = true
+}
+
+function cancelRename() {
+  renameOpen.value = false
+  renameSessionPolygon.value = null
+  renameSavedPolygonTarget.value = null
+  renameName.value = ''
+}
+
+function confirmRename() {
+  const name = renameName.value.trim()
+  if (renameSessionPolygon.value) {
+    if (name) renameSessionPolygon.value.name = name
+    persistPolygons()
+  } else if (renameSavedPolygonTarget.value) {
+    if (name) renameSavedPolygonTarget.value.name = name
+    persistSavedPolygons()
+  }
+  const finalName = name || renameSessionPolygon.value?.name || renameSavedPolygonTarget.value?.name || ''
+  status.value = `Renamed to "${finalName}"`
+  cancelRename()
 }
 
 function removePolygon(id: string) {
@@ -1230,9 +1361,71 @@ function removePolygon(id: string) {
   const polygon = polygons.value.find(p => p.id === id)
   if (polygon) polygon.found.forEach(marker => removeMarkerRecord(marker))
   polygons.value = polygons.value.filter(p => p.id !== id)
-  if (id.startsWith('poly-')) restoreCustomLayers()
+  if (!id.startsWith('country-')) restoreCustomLayers()
   refreshCountryStyles()
   persistPolygons()
+}
+
+function askSavePolygon(polygon: Polygon) {
+  polygonToSave.value = polygon
+  saveName.value = polygon.name
+  savePolyOpen.value = true
+}
+
+function cancelSavePolygon() {
+  savePolyOpen.value = false
+  polygonToSave.value = null
+  saveName.value = ''
+}
+
+function confirmSavePolygon() {
+  if (!polygonToSave.value) return
+  const name = saveName.value.trim() || polygonToSave.value.name
+  savedPolygons.value.push({
+    id: `saved-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    name,
+    geometry: polygonToSave.value.geometry,
+    nbNeeded: polygonToSave.value.nbNeeded ?? 1000,
+  })
+  persistSavedPolygons()
+  cancelSavePolygon()
+  status.value = `Saved "${name}"`
+}
+
+function loadSavedPolygon(saved: any) {
+  const polygon: Polygon = {
+    id: `area-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    name: saved.name,
+    geometry: saved.geometry,
+    nbNeeded: saved.nbNeeded ?? 1000,
+    found: [],
+  }
+  polygons.value.push(polygon)
+  addCustomLayer(polygon)
+  refreshCountryStyles()
+  persistPolygons()
+  status.value = `Loaded "${saved.name}"`
+}
+
+
+function askDeleteSavedPolygon(saved: any) {
+  savedPolygonToDelete.value = saved
+  deleteSavedOpen.value = true
+}
+
+function cancelDeleteSavedPolygon() {
+  deleteSavedOpen.value = false
+  savedPolygonToDelete.value = null
+}
+
+function confirmDeleteSavedPolygon() {
+  const id = savedPolygonToDelete.value?.id
+  cancelDeleteSavedPolygon()
+  if (id) {
+    savedPolygons.value = savedPolygons.value.filter(item => item.id !== id)
+    persistSavedPolygons()
+    status.value = 'Saved polygon deleted'
+  }
 }
 
 function clearPolygons() {
@@ -1480,6 +1673,16 @@ const confirmOpen = ref(false)
 const clearAllOpen = ref(false)
 const removePolyOpen = ref(false)
 const polygonToRemove = ref<Polygon | null>(null)
+const savedPolygons = ref<any[]>([])
+const savePolyOpen = ref(false)
+const polygonToSave = ref<Polygon | null>(null)
+const saveName = ref('')
+const renameOpen = ref(false)
+const renameName = ref('')
+const renameSessionPolygon = ref<Polygon | null>(null)
+const renameSavedPolygonTarget = ref<any>(null)
+const deleteSavedOpen = ref(false)
+const savedPolygonToDelete = ref<any>(null)
 const exportNotice = ref('')
 const copying = ref(false)
 let exportNoticeTimer: number | undefined
@@ -1487,6 +1690,20 @@ let exportNoticeTimer: number | undefined
 /** "1 location" / "24 locations". */
 function locationCount(count: number) {
   return `${count} ${count === 1 ? 'location' : 'locations'}`
+}
+
+/** Flag image URL (falls back to the ISO code if it cannot load). */
+function flagUrl(code: string) {
+  return `https://flagcdn.com/16x12/${code.toLowerCase()}.png`
+}
+
+function onFlagError(event: Event) {
+  const img = event.target as HTMLImageElement
+  if (img) {
+    img.style.display = 'none'
+    const code = img.nextElementSibling as HTMLElement | null
+    if (code) code.style.display = 'inline'
+  }
 }
 
 /** Short-lived confirmation shown under the export buttons. */
@@ -1552,6 +1769,30 @@ function makeEditMarker(pt: L.LatLng, idx: number): L.Marker {
     editPoints.value = next
     if (editLine.value) editLine.value.setLatLngs(next)
   })
+  // Dropping a vertex splits its two neighbouring edges, leaving a new
+  // handle on each side so the shape can be refined further (matches the
+  // web editor's behaviour).
+  marker.on('dragend', () => {
+    const pts = [...editPoints.value]
+    const n = pts.length
+    if (n < 3 || idx >= n) return
+    const prevIdx = (idx - 1 + n) % n
+    const nextIdx = (idx + 1) % n
+    const midPrev = markRaw(L.latLng(
+      (pts[prevIdx].lat + pts[idx].lat) / 2,
+      (pts[prevIdx].lng + pts[idx].lng) / 2,
+    ))
+    const midNext = markRaw(L.latLng(
+      (pts[idx].lat + pts[nextIdx].lat) / 2,
+      (pts[idx].lng + pts[nextIdx].lng) / 2,
+    ))
+    const updated = [...pts]
+    updated.splice(idx + 1, 0, midNext)
+    updated.splice(idx, 0, midPrev)
+    editPoints.value = updated
+    rebuildEditMarkers()
+    if (editLine.value) editLine.value.setLatLngs([...editPoints.value])
+  })
   marker.on('dblclick', (e: any) => { L.DomEvent.stopPropagation(e); removeEditVertex(idx) })
   return marker
 }
@@ -1564,7 +1805,7 @@ function startEdit(polygon: Polygon) {
   editPoints.value = coords.slice(0, -1).map(c => markRaw(L.latLng(c[1], c[0])))
   // Hide the original polygon layer while editing; other custom polygons stay.
   customLayer.clearLayers()
-  polygons.value.filter(p => p.id !== polygon.id && p.id.startsWith('poly-')).forEach(addCustomLayer)
+  polygons.value.filter(p => p.id !== polygon.id && !p.id.startsWith('country-')).forEach(addCustomLayer)
   editMarkers.value = editPoints.value.map((pt, idx) => makeEditMarker(pt, idx))
   editLine.value = markRaw(L.polygon([...editPoints.value], {
     pane: 'customPane', renderer: customRenderer, interactive: false,

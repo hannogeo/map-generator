@@ -25,6 +25,7 @@ export interface Polygon {
   geometry: any
   nbNeeded: number
   found: Marker[]
+  countryCode?: string
 }
 
 export interface Settings {
