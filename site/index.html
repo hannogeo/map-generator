@@ -4,105 +4,473 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Map Generator</title>
-<meta name="description" content="Map Generator is a desktop app that picks random street-level panorama locations inside countries or your own polygons. For GeoGuessr and location-guessing practice." />
+<meta name="description" content="A Windows desktop app that finds random street-level panorama locations inside countries or your own polygons. Filter by camera generation, date and coverage, then export JSON or CSV." />
+<meta name="theme-color" content="#0e1013" />
+<meta name="color-scheme" content="dark" />
 <link rel="icon" type="image/png" href="assets/favicon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
+<script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
-  <header class="hero">
-    <div class="container">
-      <div class="brand">
-        <img class="brand-mark" src="assets/icon.png" alt="" width="32" height="32" />
-        <span class="brand-name">Map Generator</span>
+<noscript>
+  <style>
+    .toast, .discord, .export-notice { opacity: 1 !important; transform: none !important; }
+    .reveal { display: flex !important; }
+    .cursor { display: none !important; }
+  </style>
+</noscript>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="Map Generator home">
+      <img src="assets/icon.png" width="28" height="28" alt="" />
+      <span class="brand-name">Map Generator</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#performance">Performance</a>
+      <a href="#providers">Providers</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-primary nav-download js-download" href="https://github.com/hannogeo/map-generator/releases/latest">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <!-- Hero -->
+  <section class="hero" id="top">
+    <div class="wrap">
+      <div class="hero-copy">
+        <h1>Turn any map area into street view locations.</h1>
+        <p class="lead">Choose countries or draw your own polygons, filter by camera generation, date and coverage, then export the results as JSON or CSV. Built for GeoGuessr practice and mapping work.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary btn-lg js-download" href="https://github.com/hannogeo/map-generator/releases/latest">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v8.2M4.6 6l3.4 3.4L11.4 6M2.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download for Windows
+          </a>
+          <a class="btn btn-ghost btn-lg" href="https://github.com/hannogeo/map-generator">
+            <svg class="icon gh" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.5 15.6c.4.1.5-.2.5-.4v-1.4c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.3.7.1-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.6 7.6 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.5 1.1.2 1.9.1 2.1.5.5.8 1.2.8 2.1 0 3.1-1.8 3.8-3.6 4 .3.2.5.7.5 1.5v2.2c0 .2.1.5.5.4A8 8 0 0 0 8 .2Z"/></svg>
+            View on GitHub
+          </a>
+        </div>
       </div>
-      <h1>Generate street view locations</h1>
-      <p class="lead">Pick countries or draw your own polygons and get random panorama locations from Google Street View and thirteen other providers.</p>
-      <div class="cta-row">
-        <a class="btn primary" id="download-btn" href="https://github.com/hannogeo/map-generator/releases/latest">Download for Windows</a>
-        <a class="btn ghost" href="https://github.com/hannogeo/map-generator">See on GitHub</a>
+
+      <figure class="app-window hero-mock" data-animate="hero" aria-label="Map Generator app showing Estonia selected and locations being generated">
+        <div class="window-bar">
+          <span class="window-title">Map Generator</span>
+          <span class="window-controls" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="window-body">
+          <div class="mock-map">
+            <svg class="map-svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true"
+                 data-map data-cx="0.56675" data-cy="0.297046880983043" data-zoom="7">
+              <defs>
+                <linearGradient id="sea-hero" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#10171b"/>
+                  <stop offset="1" stop-color="#0a0f12"/>
+                </linearGradient>
+                <pattern id="grid-hero" width="46" height="46" patternUnits="userSpaceOnUse">
+                  <path d="M46 0H0V46" fill="none" stroke="#93a3ae" stroke-opacity=".05"/>
+                </pattern>
+              </defs>
+              <rect width="1000" height="620" fill="url(#sea-hero)"/>
+              <rect width="1000" height="620" fill="url(#grid-hero)"/>
+              <g class="tiles" data-tiles></g>
+              <path class="selected" d="M709.3 92L179.6 244.1L119.4 517.7L388.5 466.7L424.5 519.7L521.1 459.8L529.9 467.2L606 431.5L614 448.3L615.2 431.5L655.2 462.6L684.7 472L682.2 481.7L681.6 482.9L681.8 483.1L681.8 484.5L681.2 484.8L681.5 485.3L682.3 484.8L684.2 486.7L686.7 485.8L697.8 493.5L696.3 499.6L706 515.4L721.6 519.3L729.1 528L761.6 509.3L801.9 527.3L799.4 518L807.1 510.5L804.5 502.5L818.2 492.3L816 482.1L821.9 474.2L841.8 473.2L844.8 464.3L831.6 458.5L827.1 429.4L814.5 406.8L820.9 377.5L803.5 309.6L838.1 274.4L843.6 251.7L850.4 239.5L853.1 228.3L862 221.1L874.3 220.2L878.9 207.9L880 206.7L880.6 203.8L878.7 200.4L865.2 187.9L848.3 167.3L761.2 157.7L709.3 92Z"/>
+              <g class="pins">
+                <circle class="pin" cx="565.1" cy="193.8" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="745.1" cy="380.1" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="879.6" cy="204.2" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="542.7" cy="379.4" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="796.1" cy="200.4" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="642.5" cy="383" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="589.8" cy="186.5" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="712.2" cy="209.3" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="359.5" cy="402.1" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="840.8" cy="201.7" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="682.1" cy="484" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="769.7" cy="471.7" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="535.7" cy="216.8" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="807.9" cy="208" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="455.1" cy="280.9" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="639.9" cy="292.1" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="548.4" cy="214.2" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="741.5" cy="191.5" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="717.2" cy="406.6" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="702.1" cy="249.2" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="775.4" cy="436.5" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="675.9" cy="224.6" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="570.2" cy="272.5" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="627.4" cy="305.1" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="715.3" cy="316.2" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="766.8" cy="209.1" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="746" cy="385.1" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="544.3" cy="431.4" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="676.8" cy="332.5" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="501.8" cy="209.4" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="556.2" cy="376.1" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="727.3" cy="182.4" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="383.5" cy="272.5" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="554" cy="381" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="569.8" cy="202.4" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="618.2" cy="211.7" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="672.3" cy="445.3" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="865.2" cy="189.2" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="689.2" cy="243.4" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="724.7" cy="435.9" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="591.2" cy="333.4" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="812.6" cy="428.9" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="547.9" cy="208.3" r="5" fill="#9a28ca"/>
+                <circle class="pin" cx="576.4" cy="182.3" r="5" fill="#e412d2"/>
+                <circle class="pin" cx="537.3" cy="190.6" r="5" fill="#ca283f"/>
+                <circle class="pin" cx="579.8" cy="180.9" r="5" fill="#2880ca"/>
+                <circle class="pin" cx="552.1" cy="379.5" r="5" fill="#24ac20"/>
+                <circle class="pin" cx="584.8" cy="420" r="5" fill="#9a28ca"/>
+              </g>
+            </svg>
+
+            <div class="map-zoom" aria-hidden="true"><span>+</span><span>−</span></div>
+            <div class="map-status"><span data-count>0</span> / 1000 locations</div>
+            <div class="map-running" data-running aria-hidden="true"><span class="spinner"></span> Generating · <span data-timer>0.0s</span></div>
+            <div class="cursor" data-cursor aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="cursor-ring" data-click></span>
+            </div>
+          </div>
+
+          <aside class="panel panel-left" aria-hidden="true">
+            <div class="panel-logo">Map Generator <span>v<span data-version>0.1.13</span></span></div>
+            <div class="p-section">
+              <div class="p-title">General</div>
+              <div class="p-field"><span>Map theme</span><span class="p-control">Dark</span></div>
+              <div class="p-field"><span>Street View overlay</span><span class="p-control">On</span></div>
+            </div>
+            <div class="p-section">
+              <div class="p-title">Countries / territories <span class="badge">1</span></div>
+              <div class="p-search">Search country or territory…</div>
+              <div class="p-row"><span class="p-name">Estonia</span><span class="p-count"><b data-found>0</b> / 1000</span></div>
+            </div>
+            <div class="p-section">
+              <div class="p-title">Export all <span class="badge" data-export-count>0</span></div>
+              <div class="p-btns"><span>Copy JSON</span><span>JSON</span><span>CSV</span></div>
+            </div>
+          </aside>
+
+          <aside class="panel panel-right" aria-hidden="true">
+            <div class="p-section">
+              <div class="p-title">Generator settings</div>
+              <div class="p-field"><span>Provider</span><span class="p-control">Google</span></div>
+              <div class="p-field"><span>Strategy</span><span class="p-control">Random</span></div>
+              <div class="p-field"><span>Generators</span><span class="p-control">5</span></div>
+              <div class="p-field"><span>Speed (attempts)</span><span class="p-control">1000</span></div>
+              <div class="p-check"><i class="box checked"></i>Skip ocean samples</div>
+              <div class="p-check"><i class="box"></i>One country at a time</div>
+            </div>
+            <div class="p-section">
+              <div class="p-title">Coverage settings</div>
+              <div class="p-check"><i class="box checked"></i>Reject unofficial</div>
+              <div class="p-check"><i class="box"></i>Find unofficial coverage</div>
+              <div class="p-check"><i class="box checked"></i>Find by generation</div>
+              <div class="p-nested">
+                <div class="p-check"><i class="box"></i>Gen 2</div>
+                <div class="p-check"><i class="box"></i>Gen 2 &amp; 3</div>
+                <div class="p-check"><i class="box checked"></i>Gen 4</div>
+              </div>
+            </div>
+            <div class="p-run">
+              <span class="p-btn-primary" data-start>Start generation</span>
+              <span class="p-btn-danger">Reset</span>
+            </div>
+          </aside>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">What it does</p>
+        <h2>One tool for the whole search.</h2>
+        <p class="section-lead">Select where to look, narrow it down with real coverage filters, and keep the results in a format you can use.</p>
+      </header>
+
+      <article class="feature">
+        <div class="feature-copy">
+          <h3>Select areas your way</h3>
+          <p>Click countries on the map, search the full list, or draw and import your own polygons. Every selected area gets its own location goal, so you can run a small European country and a large one in the same pass.</p>
+          <ul class="ticks">
+            <li>Built-in country and territory borders</li>
+            <li>Draw polygons or import GeoJSON</li>
+            <li>Per-area location goals</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="mock-card map-card" data-animate="select" aria-hidden="true">
+            <svg class="mini-map" viewBox="0 0 520 335" preserveAspectRatio="xMidYMid slice" aria-hidden="true"
+                 data-map data-cx="0.56675" data-cy="0.297046880983043" data-zoom="6">
+              <defs>
+                <pattern id="grid-select" width="46" height="46" patternUnits="userSpaceOnUse">
+                  <path d="M46 0H0V46" fill="none" stroke="#93a3ae" stroke-opacity=".05"/>
+                </pattern>
+              </defs>
+              <rect width="520" height="335" fill="#0c1215"/>
+              <rect width="520" height="335" fill="url(#grid-select)"/>
+              <g class="tiles" data-tiles></g>
+              <path class="sel" d="M398.1 23.7L48.6 124L8.9 304.5L186.4 270.9L210.2 305.8L273.9 266.3L279.7 271.2L330 247.7L335.2 258.8L336 247.7L362.4 268.2L381.8 274.4L380.2 280.8L379.8 281.6L379.9 281.7L379.9 282.6L379.6 282.8L379.7 283.2L380.3 282.8L381.5 284.1L383.2 283.5L390.5 288.6L389.5 292.6L395.9 303L406.2 305.6L411.2 311.3L432.6 299L459.2 310.9L457.5 304.7L462.6 299.8L460.9 294.5L469.9 287.8L468.5 281L472.4 275.8L485.5 275.2L487.5 269.3L478.8 265.4L475.8 246.3L467.5 231.4L471.7 212.1L460.2 167.2L483 144L486.7 129L491.2 121L492.9 113.6L498.8 108.9L506.9 108.3L510 100.2L510.7 99.3L511.1 97.5L509.9 95.2L500.9 86.9L489.8 73.3L432.4 67L398.1 23.7Z"/>
+            </svg>
+            <div class="mini-search">
+              <div class="mini-search-field">esto</div>
+              <div class="mini-result" data-result><span>Estonia</span><small>Estonia</small></div>
+              <div class="mini-result"><span>Estonia</span><small>United States</small></div>
+            </div>
+            <div class="cursor cursor-static" data-cursor aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="cursor-ring" data-click></span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse">
+        <div class="feature-copy">
+          <h3>Filter to what you actually need</h3>
+          <p>Reject unofficial coverage, choose camera generations, bound the date range, require blue lines, or keep a minimum distance between results. Filters run before a location is accepted, so you spend requests on candidates that can pass.</p>
+          <ul class="ticks">
+            <li>Camera generation and update type</li>
+            <li>Date range and month filters</li>
+            <li>Blue-line, author, description and altitude checks</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="mock-card filter-card" data-animate="filter" aria-hidden="true">
+            <div class="p-title">Coverage settings</div>
+            <div class="p-check" data-toggle><i class="box checked"></i>Reject unofficial</div>
+            <div class="p-check reveal" data-reveal><i class="box"></i>Find unofficial coverage</div>
+            <div class="p-check"><i class="box checked"></i>Find by generation</div>
+            <div class="p-nested">
+              <div class="p-check"><i class="box"></i>Gen 2</div>
+              <div class="p-check"><i class="box"></i>Gen 2 &amp; 3</div>
+              <div class="p-check"><i class="box checked"></i>Gen 4</div>
+            </div>
+            <div class="p-check"><i class="box checked"></i>Reject locations without date</div>
+            <div class="p-field"><span>From</span><span class="p-control">2009-01</span></div>
+            <div class="p-field"><span>To</span><span class="p-control">2026-11</span></div>
+            <div class="p-check"><i class="box checked"></i>Skip ocean samples</div>
+            <div class="cursor cursor-static" data-cursor aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="cursor-ring" data-click></span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature">
+        <div class="feature-copy">
+          <h3>Watch progress as it happens</h3>
+          <p>Locations appear on the map the moment they are found, with live counts per area and an elapsed timer. Optional desktop and Discord notifications can tell you when the first location lands or an area is finished.</p>
+          <ul class="ticks">
+            <li>Live map pins and per-area counters</li>
+            <li>Elapsed generation time</li>
+            <li>Desktop and Discord notifications</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="mock-card progress-card" data-animate="progress" aria-hidden="true">
+            <div class="p-title">Countries / territories <span class="badge">1</span></div>
+            <div class="p-row"><span class="p-name">Estonia</span><span class="p-count"><b data-found2>0</b> / 1000</span></div>
+            <div class="progress-bar"><span data-progress></span></div>
+            <div class="running-chip"><span class="spinner"></span> Generating · <span data-timer2>0.0s</span></div>
+            <div class="toast" data-toast>
+              <img class="toast-icon" src="assets/icon.png" alt="" />
+              <div class="toast-body">
+                <strong>First location found in Estonia</strong>
+                <span>Open in Street View</span>
+              </div>
+            </div>
+            <div class="discord" data-discord>
+              <div class="discord-avatar"></div>
+              <div class="discord-msg">
+                <span class="discord-name">Map Generator <small>APP</small></span>
+                <p>First location found in Estonia (67s)</p>
+                <p class="discord-link">google.com/maps/@?api=1&amp;map_action=pano&amp;pano=…</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse">
+        <div class="feature-copy">
+          <h3>Take the results with you</h3>
+          <p>Copy everything to the clipboard or export JSON and CSV. Files are named by country and count, which keeps large batches sorted when you are collecting locations across several projects.</p>
+          <ul class="ticks">
+            <li>JSON and CSV export</li>
+            <li>Copy JSON to the clipboard</li>
+            <li>Files named by country and count</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="mock-card export-card" data-animate="export" aria-hidden="true">
+            <div class="p-title">Export all <span class="badge">148</span></div>
+            <div class="p-btns export-btns">
+              <span>Copy JSON</span>
+              <span data-export-btn>JSON</span>
+              <span>CSV</span>
+            </div>
+            <div class="export-notice" data-export-notice>Saved estonia-148-locations.json</div>
+            <pre class="code"><code>[
+  {
+    "lat": 59.4372,
+    "lng": 24.7536,
+    "panoId": "abc123",
+    "imageDate": "2024-06",
+    "source": "google"
+  },
+  <span class="code-muted">…146 more</span>
+]</code></pre>
+            <div class="cursor cursor-static" data-cursor aria-hidden="true">
+              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="cursor-ring" data-click></span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Performance -->
+  <section class="section section-alt" id="performance">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">Performance</p>
+        <h2>Faster than the browser version.</h2>
+        <p class="section-lead">Generation runs in a native Rust backend with parallel sampling and a local land mask. On the same machine and network, it finishes in roughly a quarter of the time while using less memory.</p>
+      </header>
+
+      <div class="perf" data-animate="perf">
+        <div class="perf-legend">
+          <span><i class="swatch app"></i>Map Generator</span>
+          <span><i class="swatch web"></i>Browser version</span>
+        </div>
+
+        <div class="perf-row">
+          <div class="perf-label">Default filters <span>(random)</span></div>
+          <div class="perf-bars">
+            <div class="perf-bar app" style="--w:14.5%"><b>0.8 s</b></div>
+            <div class="perf-bar web" style="--w:54.5%"><b>3.0 s</b></div>
+          </div>
+          <div class="perf-ratio">3.8×</div>
+        </div>
+
+        <div class="perf-row">
+          <div class="perf-label">Gen 4 only</div>
+          <div class="perf-bars">
+            <div class="perf-bar app" style="--w:23.6%"><b>1.3 s</b></div>
+            <div class="perf-bar web" style="--w:100%"><b>5.5 s</b></div>
+          </div>
+          <div class="perf-ratio">4.2×</div>
+        </div>
+
+        <div class="perf-row">
+          <div class="perf-label">No generation filter</div>
+          <div class="perf-bars">
+            <div class="perf-bar app" style="--w:16.4%"><b>0.9 s</b></div>
+            <div class="perf-bar web" style="--w:74.5%"><b>4.1 s</b></div>
+          </div>
+          <div class="perf-ratio">4.6×</div>
+        </div>
+
+        <p class="perf-note">Google provider, Estonia, 5 generators × 1000 attempts, target of 300 locations, median of 3–5 runs. The browser version issues one request per sample with no local land check.</p>
       </div>
     </div>
-  </header>
+  </section>
 
-  <main class="container">
-    <section class="shot">
-      <img src="assets/screenshot.png" alt="Map Generator window" />
-    </section>
-
-    <section class="features">
-      <h2>What it does</h2>
-      <div class="grid">
-        <div class="card">
-          <h3>Select areas</h3>
-          <p>Click countries on the map, search the list, or draw and import polygons.</p>
-        </div>
-        <div class="card">
-          <h3>Generate locations</h3>
-          <p>Random or grid sampling across fourteen providers, with a goal per area.</p>
-        </div>
-        <div class="card">
-          <h3>Filter</h3>
-          <p>Camera generation, blue lines, road type, dates, altitude, links, descriptions, authors.</p>
-        </div>
-        <div class="card">
-          <h3>Export</h3>
-          <p>Copy or save locations as JSON or CSV. Click a pin to open its panorama.</p>
-        </div>
-        <div class="card">
-          <h3>Coverage overlays</h3>
-          <p>See where street view exists, with blue-line overlays and several colour schemes.</p>
-        </div>
-        <div class="card">
-          <h3>Keeps up to date</h3>
-          <p>Checks for new versions on its own. Settings and polygons are remembered.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="performance">
-      <h2>Performance</h2>
-      <p>Generation runs in a native Rust backend with parallel sampling: around four times faster than the browser version with the same settings, while using noticeably less RAM. The UI is a thin webview, so the app stays lightweight.</p>
-      <table class="perf-table">
-        <thead><tr><th>Scenario</th><th>Map Generator</th><th>Browser</th><th>Speedup</th></tr></thead>
-        <tbody>
-          <tr><td>Default filters (random)</td><td>0.8 s</td><td>3.0 s</td><td>3.8×</td></tr>
-          <tr><td>Gen 4 only</td><td>1.3 s</td><td>5.5 s</td><td>4.2×</td></tr>
-          <tr><td>No generation filter</td><td>0.9 s</td><td>4.1 s</td><td>4.6×</td></tr>
-        </tbody>
-      </table>
-      <p class="perf-note">Google provider, Estonia, 5 generators × 1000 attempts, target of 300 locations; median of 3–5 runs on the same machine and network. The Rust side pools a single HTTP/2 client (capped at 128 concurrent requests), skips sea samples locally with a 140 KiB land mask, and drops the redundant second Google request. The browser version issues one request per sample with no local land check.</p>
-    </section>
-
-    <section class="providers">
-      <h2>Providers</h2>
-      <p>Google Street View, Apple Look Around, Yandex, Bing Streetside, Naver, Kakao, Baidu, Tencent, Mapillary, Mapy.cz, ASIG, Já360, Vegbilder, OpenMap.</p>
-    </section>
-  </main>
-
-  <footer>
-    <div class="container">
-      <p>Inspired by <a href="https://various-map-generator.pages.dev/">various-map-generator.pages.dev</a>. Free and open source.</p>
-      <p><a href="https://github.com/hannogeo/map-generator">GitHub</a> · <a href="https://github.com/hannogeo/map-generator/releases">Releases</a> · <a href="https://github.com/hannogeo/map-generator/issues">Issues</a></p>
+  <!-- Providers -->
+  <section class="section" id="providers">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">Providers</p>
+        <h2>Fourteen sources, one workflow.</h2>
+        <p class="section-lead">Google Street View is the default and works without a key. Switch providers when you want a different kind of coverage, or mix them across projects.</p>
+      </header>
+      <ul class="chips">
+        <li>Google Street View</li>
+        <li>Apple Look Around</li>
+        <li>Yandex</li>
+        <li>Bing Streetside</li>
+        <li>Naver</li>
+        <li>Kakao</li>
+        <li>Baidu</li>
+        <li>Tencent</li>
+        <li>Mapillary</li>
+        <li>Mapy.cz</li>
+        <li>ASIG</li>
+        <li>Já360</li>
+        <li>Vegbilder</li>
+        <li>OpenMap</li>
+      </ul>
     </div>
-  </footer>
-  <script>
-    (function () {
-      var btn = document.getElementById('download-btn');
-      if (!btn) return;
-      fetch('https://api.github.com/repos/hannogeo/map-generator/releases/latest')
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          var assets = (data && data.assets) || [];
-          var setup = assets.find(function (a) { return /-setup\.exe$/i.test(a.name); });
-          var msi = assets.find(function (a) { return /\.msi$/i.test(a.name); });
-          var pick = setup || msi;
-          if (pick && pick.browser_download_url) {
-            btn.href = pick.browser_download_url;
-            btn.textContent = 'Download for Windows';
-          }
-        })
-        .catch(function () { /* keep fallback link */ });
-    })();
-  </script>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="wrap faq-wrap">
+      <header class="section-head">
+        <p class="eyebrow">FAQ</p>
+        <h2>Questions before you download.</h2>
+      </header>
+      <div class="faq">
+        <details>
+          <summary>Do I need API keys?</summary>
+          <p>Google works without a key. Mapy.cz needs a key, which you can enter in the app. Other providers may have their own requirements depending on where you are.</p>
+        </details>
+        <details>
+          <summary>Where are my locations saved?</summary>
+          <p>Locations and settings stay on your machine. Use export or copy when you want to move results into another tool.</p>
+        </details>
+        <details>
+          <summary>Can I draw my own area?</summary>
+          <p>Yes. Draw a polygon on the map or import a GeoJSON file. Your own shapes get the same per-area location goals as selected countries, so you can mix them in one run.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA -->
+  <section class="cta-band">
+    <div class="wrap cta-inner">
+      <div>
+        <h2>Generate your next set of locations.</h2>
+        <p>Free, open source, and ready for your next GeoGuessr round or mapping project.</p>
+      </div>
+      <a class="btn btn-primary btn-lg js-download" href="https://github.com/hannogeo/map-generator/releases/latest">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v8.2M4.6 6l3.4 3.4L11.4 6M2.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Download for Windows
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="footer-brand">
+      <img src="assets/icon.png" width="22" height="22" alt="" />
+      <span>Map Generator</span>
+    </div>
+    <nav class="footer-links" aria-label="External links">
+      <a href="https://github.com/hannogeo/map-generator">GitHub</a>
+      <a href="https://github.com/hannogeo/map-generator/issues">Issues</a>
+      <a href="https://various-map-generator.pages.dev/">Inspired by various-map-generator</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
 </body>
 </html>
