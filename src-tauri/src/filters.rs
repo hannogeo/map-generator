@@ -301,6 +301,61 @@ impl<'a> Filters<'a> {
         &self.settings.provider
     }
 
+    /// Generation gate that `is_pano_good` applies when the timeline is not
+    /// being walked. `None` means the filter is inactive for this provider.
+    fn generation_allows(&self, pano: &Pano) -> Option<bool> {
+        let active = self.settings.find_by_generation_enabled()
+            && ((!self.settings.reject_official && !self.check_all_dates)
+                || self.settings.select_months)
+            && GENERATION_PROVIDERS.contains(&self.provider());
+        if !active {
+            return None;
+        }
+        Some(
+            self.settings
+                .generation_allowed(&camera_generation(pano, self.provider())),
+        )
+    }
+
+    /// Whether the panorama returned by the spatial search itself matches the
+    /// date window and the generation filter.
+    fn capture_matches(&self, pano: &Pano) -> bool {
+        if let Some(date) = pano_ms(pano) {
+            if date < self.from_ms || date > self.to_ms {
+                return false;
+            }
+        }
+        self.generation_allows(pano).unwrap_or(true)
+    }
+
+    /// Captures newer than `pano` that its timeline knows about and that fall
+    /// inside the date window.
+    ///
+    /// Google's spatial search keeps pointing at the original capture of a
+    /// road after a re-drive, so a fresh drop is only reachable through the
+    /// older panorama's timeline. Following only entries newer than the
+    /// current capture keeps the extra work limited to new drops.
+    fn newer_captures(&self, pano: &Pano) -> Vec<String> {
+        if self.settings.select_months {
+            return Vec::new();
+        }
+        let Some(current) = pano_ms(pano) else {
+            return Vec::new();
+        };
+        pano.time
+            .iter()
+            .filter(|entry| entry.pano != pano.pano_id)
+            .filter(|entry| {
+                !self.settings.reject_unofficial || is_official(&entry.pano, self.provider())
+            })
+            .filter_map(|entry| {
+                let date = time_entry_ms(entry)?;
+                (date > current && date >= self.from_ms && date <= self.to_ms)
+                    .then(|| entry.pano.clone())
+            })
+            .collect()
+    }
+
     async fn fetch_by_pano(&self, id: &str) -> Option<Pano> {
         match self
             .providers
@@ -484,12 +539,18 @@ impl<'a> Filters<'a> {
             if self.settings.reject_dateless && res.image_date.is_none() {
                 return Vec::new();
             }
-            if let Some(date) = pano_ms(&res) {
-                if date < self.from_ms || date > self.to_ms {
+            if self.capture_matches(&res) {
+                starts.push((res.pano_id.clone(), 0));
+            } else {
+                // The current capture is filtered out, but a newer drive of the
+                // same road may be listed in its timeline. Google keeps
+                // returning the old panorama from spatial search, so this is
+                // the only way to reach a fresh drop.
+                starts.extend(self.newer_captures(&res).into_iter().map(|id| (id, 0)));
+                if starts.is_empty() {
                     return Vec::new();
                 }
             }
-            starts.push((res.pano_id.clone(), 0));
         }
 
         self.collect(starts).await
@@ -574,18 +635,8 @@ impl<'a> Filters<'a> {
                 }
             }
 
-            if self.settings.find_by_generation_enabled()
-                && ((!self.settings.reject_official && !self.check_all_dates)
-                    || self.settings.select_months)
-                && GENERATION_PROVIDERS.contains(&self.provider())
-            {
-                let generation = camera_generation(pano, self.provider());
-                if generation == "0" {
-                    return false;
-                }
-                if !self.settings.generation_allowed(&generation) {
-                    return false;
-                }
+            if self.generation_allows(pano) == Some(false) {
+                return false;
             }
 
             if self.settings.filter_by_altitude.enabled
@@ -1067,5 +1118,141 @@ mod tests {
         ];
         let headings: Vec<f64> = links.iter().map(|link| link.heading).collect();
         assert!(accepts_curve(&headings, 10.0));
+    }
+
+    fn gen4_settings() -> Settings {
+        let mut settings = Settings::default();
+        settings.provider = "google".into();
+        settings.from_date = "2007-01".into();
+        settings.to_date = "2026-11".into();
+        settings.reject_dateless = false;
+        settings.reject_no_description = false;
+        settings.find_by_generation = serde_json::json!({
+            "enabled": true,
+            "google": { "4": true }
+        });
+        settings
+    }
+
+    fn ghana_rings() -> PolyRings {
+        PolyRings::from_geometry(&serde_json::json!({
+            "type": "Polygon",
+            "coordinates": [[
+                [-2.70, 4.98],
+                [-2.63, 4.98],
+                [-2.63, 5.03],
+                [-2.70, 5.03],
+                [-2.70, 4.98]
+            ]]
+        }))
+        .expect("valid polygon")
+    }
+
+    /// A re-drive is published as a new panorama chain while the spatial search
+    /// keeps returning the original capture. The fresh panorama only exists as
+    /// a timeline entry of the old one, which is how Google actually serves it.
+    #[tokio::test]
+    async fn gen4_redrive_is_reached_through_the_old_timeline() {
+        let settings = gen4_settings();
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let old_id = "YvpfQLuVG--g4I7t6vmJEQ";
+        let fresh_id = "1p3AovNcyTFWrhOFoV301Q";
+        let old = Pano {
+            pano_id: old_id.into(),
+            provider: "google".into(),
+            image_date: Some("2016-03".into()),
+            world_height: 6656,
+            time: vec![
+                TimeEntry {
+                    pano: old_id.into(),
+                    date: "2016-03".into(),
+                },
+                TimeEntry {
+                    pano: fresh_id.into(),
+                    date: "2026-09".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let fresh = Pano {
+            pano_id: fresh_id.into(),
+            provider: "google".into(),
+            image_date: Some("2026-09".into()),
+            world_height: 8192,
+            ..Default::default()
+        };
+
+        assert!(!filters.capture_matches(&old));
+        assert_eq!(filters.newer_captures(&old), vec![fresh_id.to_string()]);
+        assert!(filters.capture_matches(&fresh));
+        assert!(filters.is_pano_good(&fresh, &[]).await);
+        assert!(!filters.is_pano_good(&old, &[]).await);
+    }
+
+    #[test]
+    fn only_newer_captures_inside_the_window_are_followed() {
+        let settings = gen4_settings();
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let current = "YvpfQLuVG--g4I7t6vmJEQ";
+        let mut pano = Pano {
+            pano_id: current.into(),
+            provider: "google".into(),
+            image_date: Some("2026-09".into()),
+            world_height: 6656,
+            time: vec![
+                TimeEntry {
+                    pano: current.into(),
+                    date: "2026-09".into(),
+                },
+                TimeEntry {
+                    pano: "aaaaaaaaaaaaaaaaaaaaaa".into(),
+                    date: "2016-03".into(),
+                },
+                TimeEntry {
+                    pano: "bbbbbbbbbbbbbbbbbbbbbb".into(),
+                    date: "2027-04".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(filters.newer_captures(&pano).is_empty());
+
+        // An unofficial id is skipped while "reject unofficial" is on.
+        pano.time = vec![
+            TimeEntry {
+                pano: current.into(),
+                date: "2026-09".into(),
+            },
+            TimeEntry {
+                pano: "si".into(),
+                date: "2026-10".into(),
+            },
+        ];
+        assert!(filters.newer_captures(&pano).is_empty());
+    }
+
+    #[test]
+    fn generation_gate_is_inactive_when_the_filter_is_off() {
+        let mut settings = gen4_settings();
+        settings.find_by_generation = serde_json::json!({ "enabled": false });
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let old = Pano {
+            pano_id: "YvpfQLuVG--g4I7t6vmJEQ".into(),
+            provider: "google".into(),
+            image_date: Some("2016-03".into()),
+            world_height: 6656,
+            ..Default::default()
+        };
+        assert_eq!(filters.generation_allows(&old), None);
+        assert!(filters.capture_matches(&old));
     }
 }

@@ -9,6 +9,7 @@ This project was hugely inspired by [various-map-generator](https://various-map-
 - Pick one or more countries or territories (or draw your own polygon / import GeoJSON) on the map.
 - Generate random panorama locations inside them using Google Street View and 13 other providers.
 - Filter by camera generation, blue lines, road type, date, altitude, links, description, author and more.
+- Find new drops. When a road is re-captured, Google keeps returning the original panorama from spatial search, so the app follows the old panorama's timeline to the newer captures.
 - Export the results as JSON or CSV, or copy them to the clipboard.
 - Blue-line overlays show where street view coverage exists.
 - Click any generated pin to open its panorama in the browser.
