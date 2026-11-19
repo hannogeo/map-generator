@@ -151,7 +151,10 @@
           <summary>Export all <span class="badge">{{ markers.length }}</span></summary>
           <div class="body">
             <div class="actions">
-              <button :disabled="!markers.length" @click="copyMarkers(markers)">Copy JSON</button>
+              <button :disabled="!markers.length || copying" @click="copyMarkers(markers)">
+                <span v-if="copying" class="btn-spinner" aria-hidden="true"></span>
+                Copy JSON
+              </button>
               <button :disabled="!markers.length" :title="markers.length ? exportFileName + '.json' : ''" @click="exportJson(markers)">JSON</button>
               <button :disabled="!markers.length" :title="markers.length ? exportFileName + '.csv' : ''" @click="exportCsv(markers)">CSV</button>
             </div>
@@ -592,6 +595,7 @@ let activeLabels: L.Layer | null = null
 let coverageLayer: L.TileLayer | null = null
 // base cache no longer used
 const markerLayers: Array<{ marker: MarkerRecord; layer: L.CircleMarker }> = []
+const seenMarkers = new Set<string>()
 const unlisteners: Array<() => void> = []
 let unlistenClose: (() => void) | undefined
 
@@ -698,7 +702,8 @@ onMounted(async () => {
   map.createPane('markersPane')
   map.getPane('markersPane')!.style.zIndex = '650'
 
-  markerRenderer = L.svg({ pane: 'markersPane' })
+  // Canvas rendering keeps thousands of pins cheap; SVG chokes on large sets.
+  markerRenderer = L.canvas({ pane: 'markersPane' })
   customRenderer = L.svg({ pane: 'customPane' })
   markerLayer = L.layerGroup().addTo(map)
   customLayer = L.layerGroup().addTo(map)
@@ -721,16 +726,21 @@ onMounted(async () => {
 
   unlisteners.push(await listen('generation:location', (event: any) => {
     const payload = event.payload
+    // Drop events that arrive after a stop has been requested.
+    if (stopping.value) return
     const polygon = polygons.value.find(p => p.id === payload.polygonId)
     // Late events from a stopped or reset run are dropped: the polygon is gone.
     if (!polygon) return
     const marker = payload.location as MarkerRecord
-    if (markers.value.some(m => m.panoId === marker.panoId && m.source === marker.source)) return
+    const key = `${marker.panoId ?? ''}|${marker.source ?? ''}`
+    if (seenMarkers.has(key)) return
+    seenMarkers.add(key)
     marker.polygonId = payload.polygonId
     markers.value.push(marker)
     addMarkerToMap(marker)
     polygon.found.push(marker)
     setProgressStatus(`${polygon.name}: ${polygon.found.length}/${polygon.nbNeeded}`)
+    // Persistence is coalesced and deferred to avoid serialising on every pin.
     persistPolygons()
   }))
   unlisteners.push(await listen('generation:progress', (event: any) => {
@@ -830,7 +840,7 @@ function persistPolygons(immediate = false) {
   persistTimer = window.setTimeout(() => {
     persistTimer = undefined
     writePolygons()
-  }, 400)
+  }, 1500)
 }
 
 function writePolygons() {
@@ -864,6 +874,7 @@ async function loadSavedPolygons() {
       if (polygon.id?.startsWith('poly-')) addCustomLayer(polygon)
       for (const marker of polygon.found || []) {
         marker.polygonId = polygon.id
+        seenMarkers.add(`${marker.panoId ?? ''}|${marker.source ?? ''}`)
         markers.value.push(marker)
         record.found.push(marker)
         addMarkerToMap(marker)
@@ -1470,6 +1481,7 @@ const clearAllOpen = ref(false)
 const removePolyOpen = ref(false)
 const polygonToRemove = ref<Polygon | null>(null)
 const exportNotice = ref('')
+const copying = ref(false)
 let exportNoticeTimer: number | undefined
 
 /** "1 location" / "24 locations". */
@@ -1511,6 +1523,7 @@ async function confirmReset() {
 function clearGenerationState() {
   stopElapsedTimer()
   runElapsed.value = 0
+  seenMarkers.clear()
   goalSentToEngine.clear()
   cancelDrawing()
   if (editing.value) cancelEdit()
@@ -1658,26 +1671,41 @@ function buildExport(markerList: MarkerRecord[]) {
 }
 
 async function copyMarkers(markerList: MarkerRecord[]) {
-  const text = JSON.stringify(buildExport(markerList), null, 2)
+  if (copying.value) return
+  copying.value = true
+  // Let the spinner paint before the (possibly heavy) serialisation blocks.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
   try {
-    await navigator.clipboard.writeText(text)
-  } catch {
+    const text = JSON.stringify(buildExport(markerList))
     try {
+      await navigator.clipboard.writeText(text)
+    } catch {
       const area = document.createElement('textarea')
       area.value = text
       document.body.appendChild(area)
       area.select()
       document.execCommand('copy')
       document.body.removeChild(area)
-    } catch {
-      showExportNotice('Could not copy to the clipboard')
-      return
     }
+    showExportNotice(`Copied ${locationCount(markerList.length)}`)
+  } catch {
+    showExportNotice('Could not copy to the clipboard')
+  } finally {
+    copying.value = false
   }
-  showExportNotice(`Copied ${locationCount(markerList.length)}`)
 }
 
-const exportFileName = computed(() => exportBaseName(markers.value))
+// Computed from polygons only (O(polygons)), so pushing thousands of markers
+// does not rebuild the name on every location event.
+const exportFileName = computed(() => {
+  const countries = [...new Set(polygons.value.map(polygon => (polygon.name || '').trim()).filter(Boolean))]
+  const label = countries.length === 0
+    ? 'All-countries'
+    : countries.length === 1
+      ? countries[0]
+      : `${countries.length}-countries`
+  return `${safeName(label)}-${markers.value.length}-locations`
+})
 
 function exportJson(markerList: MarkerRecord[]) {
   const name = `${exportBaseName(markerList)}.json`
