@@ -117,10 +117,16 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .logo-mark { width: 24px; height: 24px; }
 .logo-accent { color: var(--accent); }
 .logo .version {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
   color: var(--muted);
   letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .section {

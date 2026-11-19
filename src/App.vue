@@ -544,6 +544,9 @@ const markers = ref<MarkerRecord[]>([])
 const running = ref(false)
 const stopping = ref(false)
 const runElapsed = ref(0)
+/** Marks the live page so a reload can be recognised as a refresh. */
+const SESSION_KEY = 'mg:session'
+const POLYGONS_KEY = 'mg:polygons'
 let runStartedAt = 0
 let elapsedTimer: number | undefined
 const status = ref('Ready')
@@ -664,6 +667,20 @@ watch(() => polygons.value.map(p => p.id).join(','), refreshCountryStyles)
 watch(() => settings.value.coverage.opacity, value => { if (coverageLayer) coverageLayer.setOpacity(value) })
 
 onMounted(async () => {
+  // sessionStorage survives a refresh but not a relaunch, which is how a
+  // refresh is told apart from a normal start. Refreshing behaves exactly like
+  // Reset: the previous run is discarded instead of being picked back up.
+  const refreshed = sessionStorage.getItem(SESSION_KEY) === '1'
+  sessionStorage.setItem(SESSION_KEY, '1')
+
+  // A refresh recreates the page but not the backend, so a run from the
+  // previous page can still be going. Stop it before anything else.
+  try {
+    await invoke('stop_generation')
+  } catch (error) {
+    console.warn('stop on load failed', error)
+  }
+
   map = L.map('map', {
     minZoom: 2,
     maxZoom: 20,
@@ -693,7 +710,14 @@ onMounted(async () => {
   map.on('dblclick', onDblClick)
 
   await loadCountries()
-  await loadSavedPolygons()
+  if (refreshed) {
+    // Drop the snapshots the previous page wrote, so nothing is restored.
+    try {
+      localStorage.removeItem(POLYGONS_KEY)
+    } catch {}
+  } else {
+    await loadSavedPolygons()
+  }
 
   unlisteners.push(await listen('generation:location', (event: any) => {
     const payload = event.payload
@@ -720,6 +744,9 @@ onMounted(async () => {
     persistPolygons()
   }))
   unlisteners.push(await listen('generation:finished', () => {
+    // A run that was still going when the page was refreshed is stopped on
+    // load; ignore the tail of that run.
+    if (!running.value) return
     stopElapsedTimer()
     running.value = false
     stopping.value = false
@@ -727,7 +754,7 @@ onMounted(async () => {
     persistPolygons()
   }))
 
-  window.addEventListener('beforeunload', persist)
+  window.addEventListener('beforeunload', endSession)
   window.addEventListener('keydown', onKeyDown)
 
   // Closing the app works like Reset: locations and selected countries are
@@ -761,7 +788,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopElapsedTimer()
-  window.removeEventListener('beforeunload', persist)
+  window.removeEventListener('beforeunload', endSession)
   window.removeEventListener('keydown', onKeyDown)
   if (unlistenClose) unlistenClose()
   unlisteners.forEach(unlisten => unlisten())
@@ -769,9 +796,21 @@ onBeforeUnmount(() => {
   if (map) map.remove()
 })
 
-function persist() {
+/**
+ * Leaving the page (refresh, Ctrl+R) ends the session exactly like closing the
+ * window: the backend run is stopped, locations and selected countries are
+ * dropped, settings are kept.
+ */
+function endSession() {
+  void invoke('stop_generation').catch(() => {})
+  try {
+    // Writes the empty polygon list to localStorage, so the reloaded page does
+    // not restore the run that was just discarded.
+    if (map) clearGenerationState()
+  } catch (error) {
+    console.warn('clear on unload failed', error)
+  }
   saveSettings(settings.value)
-  persistPolygons(true)
 }
 
 let persistTimer: number | undefined
@@ -803,13 +842,13 @@ function writePolygons() {
       nbNeeded: p.nbNeeded,
       found: p.found,
     }))
-    localStorage.setItem('mg:polygons', JSON.stringify(slim))
+    localStorage.setItem(POLYGONS_KEY, JSON.stringify(slim))
   } catch {}
 }
 
 async function loadSavedPolygons() {
   try {
-    const raw = localStorage.getItem('mg:polygons')
+    const raw = localStorage.getItem(POLYGONS_KEY)
     if (!raw) return
     const saved = JSON.parse(raw)
     if (!Array.isArray(saved)) return
