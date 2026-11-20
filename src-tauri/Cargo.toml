@@ -1,6 +1,6 @@
 [package]
 name = "map-generator"
-version = "1.0.0"
+version = "1.0.1"
 description = "Fast desktop street-level map generator"
 authors = ["Hanno"]
 edition = "2021"

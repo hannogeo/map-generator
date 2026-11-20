@@ -184,7 +184,7 @@ impl Providers {
             }
         }
         let result = match provider {
-            "google" | "googleZoom" => google::fetch(self, &req).await,
+            "google" | "googleZoom" => google::fetch(self, &req, provider == "googleZoom").await,
             "apple" => apple::fetch(self, &req).await,
             "yandex" => yandex::fetch(self, &req).await,
             "tencent" => tencent::fetch(self, &req).await,

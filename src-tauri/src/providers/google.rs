@@ -1,32 +1,124 @@
 //! Google Street View via the internal Maps JS RPC endpoints.
 //!
-//! These are the same keyless endpoints the browser reference uses. A spatial
-//! search (`SingleImageSearch`) returns the complete panorama record, so no
-//! follow-up `GetMetadata` request is needed. Parsing follows the reference
+//! These are the same keyless endpoints the browser reference uses. `google`
+//! uses a spatial search (`SingleImageSearch`), which returns the complete
+//! panorama record. `googleZoom` instead lists the panoramas of a z17
+//! `photometa` tile and resolves one of them through `GetMetadata`, matching
+//! the reference project's `getFromGoogleZoom`. Parsing follows the reference
 //! `parseGoogle` implementation field by field.
 
 use super::{
-    as_f64, as_str, idx, month_string, post_json, FetchResult, PanoRequest, Providers,
+    as_f64, as_str, get_text, idx, month_string, post_json, FetchResult, PanoRequest, Providers,
 };
 use crate::models::{Link, Pano, TimeEntry};
+use rand::seq::SliceRandom;
 use serde_json::{json, Value};
 
 const RPC: &str = "https://maps.googleapis.com/$rpc/google.internal.maps.mapsjs.v1.MapsJsInternalService";
+const PHOTOMETA: &str = "https://www.google.com/maps/photometa/ac/v1";
+/// How many tile panoramas to try before giving up on a sample.
+const ZOOM_METADATA_TRIES: usize = 4;
 
-pub async fn fetch(providers: &Providers, req: &PanoRequest) -> FetchResult {
+pub async fn fetch(providers: &Providers, req: &PanoRequest, zoom: bool) -> FetchResult {
     if let Some(pano) = req.pano.as_deref().filter(|p| !p.is_empty()) {
-        return match metadata(providers, pano).await {
-            Some(root) => match parse_root(&root) {
-                Some(pano) => FetchResult::ok(pano),
-                None => FetchResult::zero(),
-            },
-            None => FetchResult::error(),
-        };
+        return by_id(providers, pano).await;
     }
     let (Some(lat), Some(lng)) = (req.lat, req.lng) else {
         return FetchResult::error();
     };
-    let Some(root) = search(providers, lat, lng, req.radius, req.official_only).await else {
+    if zoom {
+        if let Some(pano) = zoom_search(providers, lat, lng).await {
+            return FetchResult::ok(pano);
+        }
+    }
+    spatial_search(providers, lat, lng, req.radius, req.official_only).await
+}
+
+async fn by_id(providers: &Providers, id: &str) -> FetchResult {
+    match metadata(providers, id).await {
+        Some(root) => match parse_root(&root) {
+            Some(pano) => FetchResult::ok(pano),
+            None => FetchResult::zero(),
+        },
+        None => FetchResult::error(),
+    }
+}
+
+/// One z17 tile list is reused for every sample inside it. The reference
+/// caches the same list by tile coordinate.
+pub async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String> {
+    let (x, y) = zoom_tile(lat, lng);
+    if let Ok(cache) = providers.google_zoom.lock() {
+        if let Some(ids) = cache.get(&(x, y)) {
+            return ids.clone();
+        }
+    }
+    let url = format!("{PHOTOMETA}?pb=!1m1!1smaps_sv.tactile!6m3!1i{x}!2i{y}!3i17!8b1");
+    let Some(text) = get_text(providers, &url).await else {
+        return Vec::new();
+    };
+    let ids = parse_photometa(&text);
+    if !ids.is_empty() {
+        if let Ok(mut cache) = providers.google_zoom.lock() {
+            cache.insert((x, y), ids.clone());
+        }
+    }
+    ids
+}
+
+/// Pick a random panorama from the sample's tile. The tile only carries IDs,
+/// so the full record still comes from `GetMetadata`. Tiles without usable
+/// entries fall back to the spatial search in `fetch`.
+async fn zoom_search(providers: &Providers, lat: f64, lng: f64) -> Option<Pano> {
+    let mut ids = tile_pano_ids(providers, lat, lng).await;
+    if ids.is_empty() {
+        return None;
+    }
+    ids.shuffle(&mut rand::thread_rng());
+    for id in ids.into_iter().take(ZOOM_METADATA_TRIES) {
+        if let Some(root) = metadata(providers, &id).await {
+            if let Some(pano) = parse_root(&root) {
+                return Some(pano);
+            }
+        }
+    }
+    None
+}
+
+fn zoom_tile(lat: f64, lng: f64) -> (u32, u32) {
+    const ZOOM: i32 = 17;
+    let scale = 2_f64.powi(ZOOM);
+    let x = ((lng + 180.0) / 360.0 * scale).floor() as u32;
+    let y = ((1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * scale).floor()
+        as u32;
+    (x, y)
+}
+
+/// Tile entries live at `response[1][1][..][0][0][1]`. Unknown entries (used
+/// for coverage geometry without a resolvable panorama) have no such ID and
+/// are ignored, just like in the reference.
+fn parse_photometa(text: &str) -> Vec<String> {
+    let text = text.strip_prefix(")]}'").unwrap_or(text).trim_start();
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(entries) = idx(&idx(&value, 1), 1).as_array() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| as_str(idx(&idx(&idx(entry, 0), 0), 1)).map(str::to_string))
+        .collect()
+}
+
+async fn spatial_search(
+    providers: &Providers,
+    lat: f64,
+    lng: f64,
+    radius: f64,
+    official_only: bool,
+) -> FetchResult {
+    let Some(root) = search(providers, lat, lng, radius, official_only).await else {
         return FetchResult::zero();
     };
     // The spatial search already returns the full panorama record: location,
@@ -327,5 +419,24 @@ mod tests {
         assert_eq!(pano.links[0].pano, "node-b");
         assert_eq!(pano.links[0].heading, 90.0);
         assert_eq!(pano.time.len(), 2);
+    }
+
+    #[test]
+    fn zoom_tile_matches_reference() {
+        assert_eq!(zoom_tile(0.0, 0.0), (1 << 16, 1 << 16));
+        assert_eq!(zoom_tile(53.69738, -132.16928), (17414, 42271));
+    }
+
+    #[test]
+    fn parses_photometa_tile() {
+        let body = ")]}'\n[null,[null,[[[[2,\"abcdefghijklmnopqrstuv\"]],[1,19]]]],null]";
+        assert_eq!(parse_photometa(body), vec!["abcdefghijklmnopqrstuv"]);
+    }
+
+    #[test]
+    fn ignores_photometa_unknown_entries() {
+        // Coverage geometry entries have no resolvable panorama ID.
+        let body = "[null,null,[[[\"ChA123\",[null,null,[null,null,53.69,-132.18]]]]],null]";
+        assert!(parse_photometa(body).is_empty());
     }
 }
