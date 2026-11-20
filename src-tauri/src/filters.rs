@@ -9,7 +9,7 @@ use crate::dates::{
 };
 use crate::geo::{accepts_curve, distance_between, random_in_range, LatLng, PolyRings};
 use crate::models::{Marker, MarkerExtra, Pano, Settings, TimeEntry};
-use crate::providers::{google, FetchResult, FetchStatus, PanoRequest, Providers};
+use crate::providers::{FetchResult, FetchStatus, PanoRequest, Providers};
 use crate::tiles::{has_blue_line_at, tile_color_matches};
 use rand::seq::SliceRandom;
 use std::collections::{HashSet, VecDeque};
@@ -547,21 +547,10 @@ impl<'a> Filters<'a> {
                 // returning the old panorama from spatial search, so this is
                 // the only way to reach a fresh drop.
                 starts.extend(self.newer_captures(&res).into_iter().map(|id| (id, 0)));
-            }
-        }
-
-        if self.provider() == "googleZoom" {
-            // Tile enumeration reaches panoramas that the spatial search never
-            // returns, including disconnected parts of the same road.
-            let known: HashSet<String> = starts.iter().map(|(id, _)| id.clone()).collect();
-            for id in google::tile_pano_ids(self.providers, res.lat, res.lng).await {
-                if !known.contains(&id) {
-                    starts.push((id, 0));
+                if starts.is_empty() {
+                    return Vec::new();
                 }
             }
-        }
-        if starts.is_empty() {
-            return Vec::new();
         }
 
         self.collect(starts).await

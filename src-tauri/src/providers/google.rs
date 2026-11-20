@@ -13,11 +13,15 @@ use super::{
 use crate::models::{Link, Pano, TimeEntry};
 use rand::seq::SliceRandom;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 
 const RPC: &str = "https://maps.googleapis.com/$rpc/google.internal.maps.mapsjs.v1.MapsJsInternalService";
 const PHOTOMETA: &str = "https://www.google.com/maps/photometa/ac/v1";
 /// How many tile panoramas to try before giving up on a sample.
 const ZOOM_METADATA_TRIES: usize = 4;
+/// Tile lists are refetched periodically so coverage released during a long
+/// run does not stay invisible behind an old cache entry.
+const ZOOM_CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub async fn fetch(providers: &Providers, req: &PanoRequest, zoom: bool) -> FetchResult {
     if let Some(pano) = req.pano.as_deref().filter(|p| !p.is_empty()) {
@@ -44,13 +48,16 @@ async fn by_id(providers: &Providers, id: &str) -> FetchResult {
     }
 }
 
-/// One z17 tile list is reused for every sample inside it. The reference
-/// caches the same list by tile coordinate.
-pub async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String> {
+/// Tile IDs are shared by samples in the same z17 tile, but expire after a
+/// minute so a drive published mid-run can still be discovered. Empty tiles
+/// are never cached, so new coverage there is picked up on the next sample.
+async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String> {
     let (x, y) = zoom_tile(lat, lng);
     if let Ok(cache) = providers.google_zoom.lock() {
-        if let Some(ids) = cache.get(&(x, y)) {
-            return ids.clone();
+        if let Some((fetched, ids)) = cache.get(&(x, y)) {
+            if fetched.elapsed() < ZOOM_CACHE_TTL {
+                return ids.clone();
+            }
         }
     }
     let url = format!("{PHOTOMETA}?pb=!1m1!1smaps_sv.tactile!6m3!1i{x}!2i{y}!3i17!8b1");
@@ -58,9 +65,11 @@ pub async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<Str
         return Vec::new();
     };
     let ids = parse_photometa(&text);
-    if !ids.is_empty() {
-        if let Ok(mut cache) = providers.google_zoom.lock() {
-            cache.insert((x, y), ids.clone());
+    if let Ok(mut cache) = providers.google_zoom.lock() {
+        if ids.is_empty() {
+            cache.remove(&(x, y));
+        } else {
+            cache.insert((x, y), (Instant::now(), ids.clone()));
         }
     }
     ids
