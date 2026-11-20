@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "map-generator"
-version = "0.1.20"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "encoding_rs",

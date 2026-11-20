@@ -25,45 +25,8 @@
           link.href = pick.browser_download_url;
         });
       }
-      const tag = (data && data.tag_name || '').replace(/^v/, '');
-      if (tag) {
-        document.querySelectorAll('[data-version]').forEach((el) => {
-          el.textContent = tag;
-        });
-      }
     })
     .catch(() => { /* keep the GitHub releases fallback link */ });
-
-  /* Real Google map tiles under each mockup's vector overlay. */
-  function paintTiles(svg) {
-    const layer = svg.querySelector('[data-tiles]');
-    if (!layer) return;
-
-    const { width, height } = svg.viewBox.baseVal;
-    const world = 256 * 2 ** Number(svg.dataset.zoom);
-    const left = Number(svg.dataset.cx) * world - width / 2;
-    const top = Number(svg.dataset.cy) * world - height / 2;
-    const tileZoom = Math.ceil(Number(svg.dataset.zoom));
-    const tileSize = 256 * 2 ** (Number(svg.dataset.zoom) - tileZoom);
-    const ns = 'http://www.w3.org/2000/svg';
-    const tiles = document.createDocumentFragment();
-
-    for (let x = Math.floor(left / tileSize); x <= Math.floor((left + width) / tileSize); x += 1) {
-      for (let y = Math.floor(top / tileSize); y <= Math.floor((top + height) / tileSize); y += 1) {
-        const image = document.createElementNS(ns, 'image');
-        image.setAttribute('href', `https://mt1.google.com/vt/lyrs=m&hl=en&x=${x}&y=${y}&z=${tileZoom}`);
-        image.setAttribute('x', (x * tileSize - left).toFixed(2));
-        image.setAttribute('y', (y * tileSize - top).toFixed(2));
-        image.setAttribute('width', tileSize.toFixed(2));
-        image.setAttribute('height', tileSize.toFixed(2));
-        image.setAttribute('preserveAspectRatio', 'none');
-        tiles.appendChild(image);
-      }
-    }
-    layer.replaceChildren(tiles);
-  }
-
-  document.querySelectorAll('[data-map]').forEach(paintTiles);
 
   /* Cursor helpers */
   function moveCursor(cursor, target) {

@@ -66,20 +66,8 @@
         </div>
         <div class="window-body">
           <div class="mock-map">
-            <svg class="map-svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true"
-                 data-map data-cx="0.56675" data-cy="0.297046880983043" data-zoom="7">
-              <defs>
-                <linearGradient id="sea-hero" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#10171b"/>
-                  <stop offset="1" stop-color="#0a0f12"/>
-                </linearGradient>
-                <pattern id="grid-hero" width="46" height="46" patternUnits="userSpaceOnUse">
-                  <path d="M46 0H0V46" fill="none" stroke="#93a3ae" stroke-opacity=".05"/>
-                </pattern>
-              </defs>
-              <rect width="1000" height="620" fill="url(#sea-hero)"/>
-              <rect width="1000" height="620" fill="url(#grid-hero)"/>
-              <g class="tiles" data-tiles></g>
+            <svg class="map-svg" viewBox="0 0 1000 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <image href="assets/mockup-hero.webp" width="1000" height="620" preserveAspectRatio="none"/>
               <path class="selected" d="M709.3 92L179.6 244.1L119.4 517.7L388.5 466.7L424.5 519.7L521.1 459.8L529.9 467.2L606 431.5L614 448.3L615.2 431.5L655.2 462.6L684.7 472L682.2 481.7L681.6 482.9L681.8 483.1L681.8 484.5L681.2 484.8L681.5 485.3L682.3 484.8L684.2 486.7L686.7 485.8L697.8 493.5L696.3 499.6L706 515.4L721.6 519.3L729.1 528L761.6 509.3L801.9 527.3L799.4 518L807.1 510.5L804.5 502.5L818.2 492.3L816 482.1L821.9 474.2L841.8 473.2L844.8 464.3L831.6 458.5L827.1 429.4L814.5 406.8L820.9 377.5L803.5 309.6L838.1 274.4L843.6 251.7L850.4 239.5L853.1 228.3L862 221.1L874.3 220.2L878.9 207.9L880 206.7L880.6 203.8L878.7 200.4L865.2 187.9L848.3 167.3L761.2 157.7L709.3 92Z"/>
               <g class="pins">
                 <circle class="pin" cx="565.1" cy="193.8" r="5" fill="#2880ca"/>
@@ -137,13 +125,13 @@
             <div class="map-status"><span data-count>0</span> / 1000 locations</div>
             <div class="map-running" data-running aria-hidden="true"><span class="spinner"></span> Generating · <span data-timer>0.0s</span></div>
             <div class="cursor" data-cursor aria-hidden="true">
-              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.44 1.43l-1.58 6.13a.5.5 0 0 1-.95.06z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.25" stroke-linejoin="round"/></svg>
               <span class="cursor-ring" data-click></span>
             </div>
           </div>
 
           <aside class="panel panel-left" aria-hidden="true">
-            <div class="panel-logo">Map Generator <span>v<span data-version>0.1.13</span></span></div>
+            <div class="panel-logo">Map Generator</div>
             <div class="p-section">
               <div class="p-title">General</div>
               <div class="p-field"><span>Map theme</span><span class="p-control">Dark</span></div>
@@ -212,16 +200,8 @@
         </div>
         <div class="feature-visual">
           <div class="mock-card map-card" data-animate="select" aria-hidden="true">
-            <svg class="mini-map" viewBox="0 0 520 335" preserveAspectRatio="xMidYMid slice" aria-hidden="true"
-                 data-map data-cx="0.56675" data-cy="0.297046880983043" data-zoom="6">
-              <defs>
-                <pattern id="grid-select" width="46" height="46" patternUnits="userSpaceOnUse">
-                  <path d="M46 0H0V46" fill="none" stroke="#93a3ae" stroke-opacity=".05"/>
-                </pattern>
-              </defs>
-              <rect width="520" height="335" fill="#0c1215"/>
-              <rect width="520" height="335" fill="url(#grid-select)"/>
-              <g class="tiles" data-tiles></g>
+            <svg class="mini-map" viewBox="0 0 520 335" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <image href="assets/mockup-select.webp" width="520" height="335" preserveAspectRatio="none"/>
               <path class="sel" d="M398.1 23.7L48.6 124L8.9 304.5L186.4 270.9L210.2 305.8L273.9 266.3L279.7 271.2L330 247.7L335.2 258.8L336 247.7L362.4 268.2L381.8 274.4L380.2 280.8L379.8 281.6L379.9 281.7L379.9 282.6L379.6 282.8L379.7 283.2L380.3 282.8L381.5 284.1L383.2 283.5L390.5 288.6L389.5 292.6L395.9 303L406.2 305.6L411.2 311.3L432.6 299L459.2 310.9L457.5 304.7L462.6 299.8L460.9 294.5L469.9 287.8L468.5 281L472.4 275.8L485.5 275.2L487.5 269.3L478.8 265.4L475.8 246.3L467.5 231.4L471.7 212.1L460.2 167.2L483 144L486.7 129L491.2 121L492.9 113.6L498.8 108.9L506.9 108.3L510 100.2L510.7 99.3L511.1 97.5L509.9 95.2L500.9 86.9L489.8 73.3L432.4 67L398.1 23.7Z"/>
             </svg>
             <div class="mini-search">
@@ -230,7 +210,7 @@
               <div class="mini-result"><span>Estonia</span><small>United States</small></div>
             </div>
             <div class="cursor cursor-static" data-cursor aria-hidden="true">
-              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.44 1.43l-1.58 6.13a.5.5 0 0 1-.95.06z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.25" stroke-linejoin="round"/></svg>
               <span class="cursor-ring" data-click></span>
             </div>
           </div>
@@ -263,7 +243,7 @@
             <div class="p-field"><span>To</span><span class="p-control">2026-11</span></div>
             <div class="p-check"><i class="box checked"></i>Skip ocean samples</div>
             <div class="cursor cursor-static" data-cursor aria-hidden="true">
-              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.44 1.43l-1.58 6.13a.5.5 0 0 1-.95.06z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.25" stroke-linejoin="round"/></svg>
               <span class="cursor-ring" data-click></span>
             </div>
           </div>
@@ -335,7 +315,7 @@
   <span class="code-muted">…146 more</span>
 ]</code></pre>
             <div class="cursor cursor-static" data-cursor aria-hidden="true">
-              <svg viewBox="0 0 20 20"><path d="M4 2l12 7-5.2 1.3L13 17l-2.4 1-2.3-6.6L4 15z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.44 1.43l-1.58 6.13a.5.5 0 0 1-.95.06z" fill="#f4f6f8" stroke="#0b0d10" stroke-width="1.25" stroke-linejoin="round"/></svg>
               <span class="cursor-ring" data-click></span>
             </div>
           </div>

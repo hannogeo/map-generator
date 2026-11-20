@@ -2,7 +2,7 @@
 
 A fast, low-memory desktop app for generating street-level panorama locations inside GeoJSON polygons.
 
-This project was hugely inspired by [various-map-generator](https://various-map-generator.pages.dev/). This is a native desktop take on it: offline-friendly, with built-in country polygons and automatic updates.
+This project was hugely inspired by [various-map-generator](https://various-map-generator.pages.dev/). This is a native desktop take on it: a parallel Rust backend, built-in country polygons and automatic updates.
 
 ## What it does
 
