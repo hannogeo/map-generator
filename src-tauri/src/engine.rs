@@ -46,6 +46,9 @@ struct RunContext {
     providers: Arc<Providers>,
     /// Panorama ids already taken (globally unique across polygons).
     seen: Mutex<HashSet<String>>,
+    /// Every id visited or claimed by a walk. Seeded with `seen` so a walk
+    /// stops when it reaches an existing location instead of walking past it.
+    claimed: Mutex<HashSet<String>>,
     /// Markers found per polygon id, this run included.
     counts: Mutex<HashMap<String, usize>>,
     /// Live goals per polygon id, shared with the `update_goals` command.
@@ -147,11 +150,13 @@ pub async fn run(
     }
     .max(1);
 
+    let claimed = Mutex::new(seen.clone());
     let ctx = Arc::new(RunContext {
         app,
         settings,
         providers,
         seen: Mutex::new(seen),
+        claimed,
         counts: Mutex::new(counts),
         goals,
         start,
@@ -212,7 +217,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
         None
     };
 
-    let mut set: JoinSet<Vec<Marker>> = JoinSet::new();
+    let mut set: JoinSet<()> = JoinSet::new();
     let mut exhausted = false;
     let mut sea_rejections = 0u32;
     let mut skip_land_mask = false;
@@ -281,7 +286,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
             set.spawn(async move {
                 let _permit = task_ctx.semaphore.acquire().await.ok();
                 if task_ctx.stop.load(Ordering::Relaxed) {
-                    return Vec::new();
+                    return;
                 }
                 let found = if task_ctx.settings.find_regions {
                     task_poly
@@ -300,10 +305,7 @@ async fn run_one(ctx: Arc<RunContext>, poly: Arc<PolyRuntime>) {
             break;
         };
         // A cancelled or panicked sample must not kill the run.
-        let Ok(markers) = joined else { continue };
-        for marker in markers {
-            try_add_marker(&ctx, &poly, needed, marker).await;
-        }
+        let Ok(()) = joined else { continue };
     }
 
     set.abort_all();
@@ -352,30 +354,36 @@ fn check_point(
     PointCheck::Accept
 }
 
-async fn process_sample(
-    ctx: &RunContext,
-    poly: &PolyRuntime,
-    point: LatLng,
-    found: &[LatLng],
-) -> Vec<Marker> {
+async fn process_sample(ctx: &RunContext, poly: &PolyRuntime, point: LatLng, found: &[LatLng]) {
     if ctx.stop.load(Ordering::Relaxed) {
-        return Vec::new();
+        return;
     }
     let filters = Filters::new(&ctx.settings, &ctx.providers, &poly.rings);
-    let candidates = filters.candidates(point.lat, point.lng, found).await;
-    let mut out = Vec::new();
-    for pano in candidates {
-        {
-            let Ok(mut seen) = ctx.seen.lock() else {
-                continue;
-            };
-            if !seen.insert(pano.pano_id.clone()) {
-                continue;
+    let needed = poly.needed();
+
+    // Emit each linked panorama as soon as it passes the filters, rather than
+    // returning a batch after the whole link traversal has finished.
+    filters
+        .candidates(point.lat, point.lng, found, &ctx.claimed, |pano| {
+            let filters = &filters;
+            async move {
+                if ctx.stop.load(Ordering::Relaxed) {
+                    return false;
+                }
+                {
+                    let Ok(mut seen) = ctx.seen.lock() else {
+                        return true;
+                    };
+                    if !seen.insert(pano.pano_id.clone()) {
+                        return true;
+                    }
+                }
+                let marker = filters.build_marker(&pano).await;
+                try_add_marker(ctx, poly, needed, marker).await.is_some()
+                    && !ctx.stop.load(Ordering::Relaxed)
             }
-        }
-        out.push(filters.build_marker(&pano).await);
-    }
-    out
+        })
+        .await;
 }
 
 async fn try_add_marker(

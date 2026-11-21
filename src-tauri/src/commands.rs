@@ -1,8 +1,9 @@
 use crate::engine;
-use crate::models::{GoalUpdate, Goals, PlaceResult, PolygonInput, Settings};
-use crate::providers::Providers;
+use crate::models::{GoalUpdate, Goals, PanoDotTile, PlaceResult, PolygonInput, Settings};
+use crate::providers::{google, Providers};
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -82,6 +83,35 @@ pub async fn start_generation(
     }
 
     Ok(())
+}
+
+/// Fetch all panorama points in the requested z17 photometa tiles. The
+/// frontend keeps its own tile cache, so this is only called for tiles that
+/// enter the viewport at close zoom.
+#[tauri::command]
+pub async fn fetch_pano_dots(tiles: Vec<(u32, u32)>) -> Result<Vec<PanoDotTile>, String> {
+    const MAX_TILES: usize = 256;
+    if tiles.len() > MAX_TILES {
+        return Err(format!("too many photometa tiles: {}", tiles.len()));
+    }
+    let providers = Providers::new();
+    let mut requested = HashSet::new();
+    let mut fetches = FuturesUnordered::new();
+    for (x, y) in tiles {
+        if !requested.insert((x, y)) {
+            continue;
+        }
+        let providers = &providers;
+        fetches.push(async move {
+            let dots = google::fetch_pano_dots(providers, x, y).await;
+            PanoDotTile { x, y, dots }
+        });
+    }
+    let mut result = Vec::new();
+    while let Some(tile) = fetches.next().await {
+        result.push(tile);
+    }
+    Ok(result)
 }
 
 #[tauri::command]

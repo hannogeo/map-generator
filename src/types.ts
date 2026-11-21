@@ -1,5 +1,17 @@
 export interface LatLng { lat: number; lng: number }
 
+export interface PanoDot {
+  panoId: string
+  lat: number
+  lng: number
+}
+
+export interface PanoDotTile {
+  x: number
+  y: number
+  dots: PanoDot[]
+}
+
 export interface Marker {
   panoId: string
   lat: number

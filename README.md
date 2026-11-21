@@ -28,7 +28,7 @@ Google, Apple, Yandex, Bing, Naver, Kakao, Baidu, Tencent, Mapillary, Mapy.cz, A
 
 ## Settings
 
-Everything is saved automatically and persists between sessions: provider, radius, strategy (random/grid), number of generators, speed, ocean-sample filtering, filters, notification preferences and more. Use *Reset* to clear locations and selected countries while keeping your settings.
+Everything is saved automatically and persists between sessions: provider, radius, strategy (random/grid), number of generators, speed, ocean-sample filtering, filters, notification preferences and more. Use *Reset* to clear found locations while keeping the selected countries and your settings.
 
 ## Notifications
 

@@ -288,8 +288,8 @@
               <label class="check" v-if="settings.provider === 'tencent'"><input type="checkbox" v-model="settings.findNightCoverage" /> Find night coverage</label>
               <label class="check"><input type="checkbox" v-model="settings.onlyOneInTimeframe" /> Only one panorama per location</label>
               <label class="check"><input type="checkbox" v-model="settings.checkLinks" /> Check linked panos</label>
-              <div class="field" v-if="settings.checkLinks">
-                <span>Link depth</span>
+              <div class="field" v-if="settings.checkLinks" title="Maximum linked panoramas checked between accepted locations. The counter resets after each match.">
+                <span>Link look-ahead</span>
                 <div class="pair">
                   <input type="range" min="1" max="10" step="1" v-model.number="settings.linksDepth" />
                   <span class="value">{{ settings.linksDepth }}</span>
@@ -479,7 +479,7 @@
     <div v-if="confirmOpen" class="modal-backdrop" @click="cancelReset">
       <div class="modal" @click.stop>
         <div class="modal-title">Reset generation?</div>
-        <div class="modal-body">This clears all found locations and removes the selected countries. Settings are kept.</div>
+        <div class="modal-body">This clears all found locations. Selected countries and their goals are kept. Settings are kept.</div>
         <div class="modal-actions">
           <button @click="cancelReset">Cancel</button>
           <button class="danger" @click="confirmReset">Reset</button>
@@ -578,7 +578,7 @@ import {
   isPermissionGranted as notificationGranted,
   requestPermission as requestNotificationPermission,
 } from '@tauri-apps/plugin-notification'
-import type { Marker, Polygon, Settings } from './types'
+import type { Marker, PanoDotTile, Polygon, Settings } from './types'
 import { loadSettings, saveSettings } from './settings'
 import {
   COLOR_SCHEMES,
@@ -617,6 +617,8 @@ const providerNames: Record<string, string> = {
   asig: 'ASIG', ja: 'Já', vegbilder: 'Vegbilder',
 }
 const altitudeProviders = ['google', 'googleZoom', 'bing', 'naver', 'mapillary', 'baidu', 'mapycz', 'asig', 'tencent']
+const PANO_DOTS_ZOOM = 17
+const PANO_DOT_TILE_ZOOM = 17
 const months = [
   { value: '01', label: 'January' }, { value: '02', label: 'February' },
   { value: '03', label: 'March' }, { value: '04', label: 'April' },
@@ -670,17 +672,21 @@ const radiusVisible = computed(() => !['apple', 'naver', 'yandex', 'googleZoom']
 let map: L.Map
 let markerLayer: L.LayerGroup
 let customLayer: L.LayerGroup
+let panoDotLayer: L.LayerGroup
 // Markers and drawn overlays use SVG renderers: a Canvas renderer fills the
 // whole pane and swallows every map click, which made country selection stop
 // working as soon as one marker existed.
 let markerRenderer: L.SVG
 let customRenderer: L.SVG
+let panoRenderer: L.SVG
 let countryLayer: L.GeoJSON | null = null
 let activeBase: L.Layer | null = null
 let activeLabels: L.Layer | null = null
 let coverageLayer: L.TileLayer | null = null
 // base cache no longer used
 const markerLayers: Array<{ marker: MarkerRecord; layer: L.CircleMarker }> = []
+const panoDotTiles = new Map<string, PanoDotTile['dots']>()
+const panoDotFetching = new Set<string>()
 const seenMarkers = new Set<string>()
 const unlisteners: Array<() => void> = []
 let unlistenClose: (() => void) | undefined
@@ -787,16 +793,26 @@ onMounted(async () => {
   map.getPane('customPane')!.style.zIndex = '360'
   map.createPane('markersPane')
   map.getPane('markersPane')!.style.zIndex = '650'
+  map.createPane('panoPointsPane')
+  map.getPane('panoPointsPane')!.style.zIndex = '660'
+  // The dots are non-interactive; never let their layer eat map clicks.
+  map.getPane('panoPointsPane')!.style.pointerEvents = 'none'
 
   // Canvas rendering keeps thousands of pins cheap; SVG chokes on large sets.
   markerRenderer = L.canvas({ pane: 'markersPane' })
   customRenderer = L.svg({ pane: 'customPane' })
+  panoRenderer = L.svg({ pane: 'panoPointsPane' })
   markerLayer = L.layerGroup().addTo(map)
   customLayer = L.layerGroup().addTo(map)
+  panoDotLayer = L.layerGroup().addTo(map)
 
   setBase(settings.value.mapTheme || 'default')
   applyCoverage()
-  map.on('zoomend', () => { currentZoom.value = map.getZoom() })
+  map.on('zoomend', () => {
+    currentZoom.value = map.getZoom()
+    void refreshPanoDots()
+  })
+  map.on('moveend', () => { void refreshPanoDots() })
   map.on('click', onMapClick)
   map.on('dblclick', onDblClick)
 
@@ -1102,8 +1118,14 @@ function onProviderChange() {
 
 function toggleMarkerLayer() {
   if (!map) return
-  if (markersVisible.value) markerLayer.addTo(map)
-  else map.removeLayer(markerLayer)
+  if (markersVisible.value) {
+    markerLayer.addTo(map)
+    if (map.getZoom() >= PANO_DOTS_ZOOM) panoDotLayer.addTo(map)
+    void refreshPanoDots()
+  } else {
+    map.removeLayer(markerLayer)
+    map.removeLayer(panoDotLayer)
+  }
 }
 
 async function loadCountries() {
@@ -1571,6 +1593,95 @@ function refreshMarkerVisibility() {
   saveSettings(settings.value)
 }
 
+function panoTileKey(tile: { x: number; y: number }) {
+  return `${tile.x},${tile.y}`
+}
+
+function panoTileFor(lat: number, lng: number) {
+  const scale = 2 ** PANO_DOT_TILE_ZOOM
+  const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, lat))
+  const sin = Math.sin((clampedLat * Math.PI) / 180)
+  const x = Math.floor(((lng + 180) / 360) * scale)
+  const y = Math.floor((0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale)
+  return {
+    x: ((x % scale) + scale) % scale,
+    y: Math.max(0, Math.min(scale - 1, y)),
+  }
+}
+
+function visiblePanoTiles() {
+  const scale = 2 ** PANO_DOT_TILE_ZOOM
+  const bounds = map.getBounds()
+  let west = Math.floor(((bounds.getWest() + 180) / 360) * scale)
+  let east = Math.floor(((bounds.getEast() + 180) / 360) * scale)
+  if (east < west) east += scale
+  const north = panoTileFor(bounds.getNorth(), 0).y
+  const south = panoTileFor(bounds.getSouth(), 0).y
+  const tiles: Array<{ x: number; y: number }> = []
+  for (let x = west; x <= east; x++) {
+    for (let y = north; y <= south; y++) {
+      tiles.push({ x: ((x % scale) + scale) % scale, y })
+    }
+  }
+  return tiles
+}
+
+function drawPanoDots() {
+  if (!map || !panoDotLayer) return
+  panoDotLayer.clearLayers()
+  if (map.getZoom() < PANO_DOTS_ZOOM || !markersVisible.value) return
+  for (const tile of visiblePanoTiles()) {
+    for (const dot of panoDotTiles.get(panoTileKey(tile)) || []) {
+      panoDotLayer.addLayer(L.circleMarker([dot.lat, dot.lng], {
+        pane: 'panoPointsPane',
+        renderer: panoRenderer,
+        radius: 2.5,
+        color: '#ff0000',
+        weight: 0,
+        fillColor: '#ff0000',
+        fillOpacity: 0.7,
+        interactive: false,
+      }))
+    }
+  }
+}
+
+function refreshPanoDots() {
+  if (!map || !panoDotLayer) return
+  if (map.getZoom() < PANO_DOTS_ZOOM || !markersVisible.value) {
+    panoDotLayer.clearLayers()
+    return
+  }
+  const tiles = visiblePanoTiles()
+  const pending = tiles.filter(tile => {
+    const key = panoTileKey(tile)
+    return !panoDotTiles.has(key) && !panoDotFetching.has(key)
+  })
+  if (pending.length) {
+    pending.forEach(tile => panoDotFetching.add(panoTileKey(tile)))
+    void invoke<PanoDotTile[]>('fetch_pano_dots', {
+      tiles: pending.map(tile => [tile.x, tile.y]),
+    }).then(result => {
+      for (const tile of result) panoDotTiles.set(panoTileKey(tile), tile.dots)
+      pending.forEach(tile => {
+        const key = panoTileKey(tile)
+        panoDotFetching.delete(key)
+        if (!panoDotTiles.has(key)) panoDotTiles.set(key, [])
+      })
+      drawPanoDots()
+    }).catch(error => {
+      console.warn('pano dots failed', error)
+      pending.forEach(tile => {
+        const key = panoTileKey(tile)
+        panoDotFetching.delete(key)
+        if (!panoDotTiles.has(key)) panoDotTiles.set(key, [])
+      })
+      drawPanoDots()
+    })
+  }
+  drawPanoDots()
+}
+
 function openPanorama(marker: Marker) {
   const provider = (marker.source || '').replace('_pano', '').replace('qq', 'tencent')
   const heading = marker.heading ?? 0
@@ -1769,7 +1880,7 @@ async function resetGeneration() {
 
 async function confirmReset() {
   confirmOpen.value = false
-  clearGenerationState()
+  clearAllLocations()
   status.value = 'Generation reset'
 }
 
@@ -1784,8 +1895,10 @@ function clearGenerationState() {
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
+  panoDotLayer.clearLayers()
   markersVisible.value = true
   markerLayer.addTo(map)
+  panoDotLayer.addTo(map)
   polygons.value = []
   customLayer.clearLayers()
   refreshCountryStyles()
@@ -1904,8 +2017,9 @@ function askClearAllLocations() {
   clearAllOpen.value = true
 }
 
-function confirmClearAllLocations() {
-  clearAllOpen.value = false
+function clearAllLocations() {
+  seenMarkers.clear()
+  goalSentToEngine.clear()
   polygons.value.forEach(polygon => {
     polygon.found.forEach(marker => removeMarkerRecord(marker))
     polygon.found = []
@@ -1913,8 +2027,13 @@ function confirmClearAllLocations() {
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
-  status.value = 'All locations cleared'
   persistPolygons()
+}
+
+function confirmClearAllLocations() {
+  clearAllOpen.value = false
+  clearAllLocations()
+  status.value = 'All locations cleared'
 }
 
 function exportPanoId(marker: Marker) {

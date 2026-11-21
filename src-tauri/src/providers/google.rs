@@ -10,7 +10,7 @@
 use super::{
     as_f64, as_str, get_text, idx, month_string, post_json, FetchResult, PanoRequest, Providers,
 };
-use crate::models::{Link, Pano, TimeEntry};
+use crate::models::{Link, Pano, PanoDot, TimeEntry};
 use rand::seq::SliceRandom;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -48,31 +48,57 @@ async fn by_id(providers: &Providers, id: &str) -> FetchResult {
     }
 }
 
-/// Tile IDs are shared by samples in the same z17 tile, but expire after a
+fn photometa_url(x: u32, y: u32) -> String {
+    format!("{PHOTOMETA}?pb=!1m1!1smaps_sv.tactile!6m3!1i{x}!2i{y}!3i17!8b1")
+}
+
+/// Tile dots are shared by samples in the same z17 tile, but expire after a
 /// minute so a drive published mid-run can still be discovered. Empty tiles
 /// are never cached, so new coverage there is picked up on the next sample.
-async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String> {
+async fn tile_dots(providers: &Providers, lat: f64, lng: f64) -> Vec<PanoDot> {
     let (x, y) = zoom_tile(lat, lng);
     if let Ok(cache) = providers.google_zoom.lock() {
-        if let Some((fetched, ids)) = cache.get(&(x, y)) {
+        if let Some((fetched, dots)) = cache.get(&(x, y)) {
             if fetched.elapsed() < ZOOM_CACHE_TTL {
-                return ids.clone();
+                return dots.clone();
             }
         }
     }
-    let url = format!("{PHOTOMETA}?pb=!1m1!1smaps_sv.tactile!6m3!1i{x}!2i{y}!3i17!8b1");
-    let Some(text) = get_text(providers, &url).await else {
+    let Some(text) = get_text(providers, &photometa_url(x, y)).await else {
         return Vec::new();
     };
-    let ids = parse_photometa(&text);
+    let dots = parse_photometa(&text);
     if let Ok(mut cache) = providers.google_zoom.lock() {
-        if ids.is_empty() {
+        if dots.is_empty() {
             cache.remove(&(x, y));
         } else {
-            cache.insert((x, y), (Instant::now(), ids.clone()));
+            cache.insert((x, y), (Instant::now(), dots.clone()));
         }
     }
-    ids
+    dots
+}
+
+async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String> {
+    tile_dots(providers, lat, lng)
+        .await
+        .into_iter()
+        .filter(|dot| !dot.pano_id.is_empty())
+        .map(|dot| dot.pano_id)
+        .collect()
+}
+
+/// Every point in one z17 photometa tile, including coverage-only entries
+/// with no resolvable pano id. Used by the close-zoom dot layer.
+pub async fn fetch_pano_dots(providers: &Providers, x: u32, y: u32) -> Vec<PanoDot> {
+    const ZOOM: u32 = 17;
+    let scale = 1_u64 << ZOOM;
+    if u64::from(x) >= scale || u64::from(y) >= scale {
+        return Vec::new();
+    }
+    let Some(text) = get_text(providers, &photometa_url(x, y)).await else {
+        return Vec::new();
+    };
+    parse_photometa(&text)
 }
 
 /// Pick a random panorama from the sample's tile. The tile only carries IDs,
@@ -103,10 +129,11 @@ fn zoom_tile(lat: f64, lng: f64) -> (u32, u32) {
     (x, y)
 }
 
-/// Tile entries live at `response[1][1][..][0][0][1]`. Unknown entries (used
-/// for coverage geometry without a resolvable panorama) have no such ID and
-/// are ignored, just like in the reference.
-fn parse_photometa(text: &str) -> Vec<String> {
+/// Tile entries live at `response[1][1][..][0]`; the id is `[0][1]` and the
+/// position is `[2][0][2..3]`. Coverage-only entries have no id but still have
+/// a position, so they are kept for the dot layer and filtered out when the
+/// generator needs a resolvable panorama.
+fn parse_photometa(text: &str) -> Vec<PanoDot> {
     let text = text.strip_prefix(")]}'").unwrap_or(text).trim_start();
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
@@ -116,7 +143,24 @@ fn parse_photometa(text: &str) -> Vec<String> {
     };
     entries
         .iter()
-        .filter_map(|entry| as_str(idx(&idx(&idx(entry, 0), 0), 1)).map(str::to_string))
+        .filter_map(|entry| {
+            let info = idx(entry, 0);
+            let pos = idx(&idx(info, 2), 0);
+            let lat = idx(pos, 2).as_f64()?;
+            let lng = idx(pos, 3).as_f64()?;
+            if !lat.is_finite()
+                || !lng.is_finite()
+                || !(-90.0..=90.0).contains(&lat)
+                || !(-180.0..=180.0).contains(&lng)
+            {
+                return None;
+            }
+            Some(PanoDot {
+                pano_id: as_str(idx(&idx(info, 0), 1)).unwrap_or("").to_string(),
+                lat,
+                lng,
+            })
+        })
         .collect()
 }
 
@@ -446,14 +490,23 @@ mod tests {
 
     #[test]
     fn parses_photometa_tile() {
-        let body = ")]}'\n[null,[null,[[[[2,\"abcdefghijklmnopqrstuv\"]],[1,19]]]],null]";
-        assert_eq!(parse_photometa(body), vec!["abcdefghijklmnopqrstuv"]);
+        let body = ")]}'\n[null,[null,[[[[2,\"abcdefghijklmnopqrstuv\"],null,[[null,null,48.85,2.29],[1,2],[3,4]]],[1,19]]]],null]";
+        let dots = parse_photometa(body);
+        assert_eq!(dots.len(), 1);
+        assert_eq!(dots[0].pano_id, "abcdefghijklmnopqrstuv");
+        assert_eq!(dots[0].lat, 48.85);
+        assert_eq!(dots[0].lng, 2.29);
     }
 
     #[test]
-    fn ignores_photometa_unknown_entries() {
-        // Coverage geometry entries have no resolvable panorama ID.
-        let body = "[null,null,[[[\"ChA123\",[null,null,[null,null,53.69,-132.18]]]]],null]";
-        assert!(parse_photometa(body).is_empty());
+    fn keeps_photometa_entries_without_id() {
+        // Coverage geometry entries still need a dot; only the generator's id
+        // lookup ignores them.
+        let body = "[null,[null,[[[null,null,[[null,null,53.69,-132.18]]],[1,19]]]],null]";
+        let dots = parse_photometa(body);
+        assert_eq!(dots.len(), 1);
+        assert!(dots[0].pano_id.is_empty());
+        assert_eq!(dots[0].lat, 53.69);
+        assert_eq!(dots[0].lng, -132.18);
     }
 }

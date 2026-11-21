@@ -20,7 +20,7 @@ pub mod vegbilder;
 pub mod yandex;
 pub mod asig;
 
-use crate::models::Pano;
+use crate::models::{Pano, PanoDot};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -99,9 +99,9 @@ pub struct Providers {
     pub client: reqwest::Client,
     cache: Mutex<HashMap<String, Pano>>,
     pub apple_tiles: Mutex<HashMap<(u32, u32), Vec<apple::AppleLocation>>>,
-    /// Cached z17 photometa tile IDs with their fetch time. Entries expire so
+    /// Cached z17 photometa tiles with their fetch time. Entries expire so
     /// coverage released mid-run can still be picked up.
-    pub google_zoom: Mutex<HashMap<(u32, u32), (std::time::Instant, Vec<String>)>>,
+    pub google_zoom: Mutex<HashMap<(u32, u32), (std::time::Instant, Vec<PanoDot>)>>,
     pub openmap_tiles: Mutex<HashMap<(u32, u32), Vec<openmap::OpenMapFeature>>>,
     pub asig_tiles: Mutex<HashMap<(u32, u32), Vec<asig::AsigFeature>>>,
     pub vegbilder: Mutex<HashMap<String, Vec<vegbilder::VegbilderFeature>>>,

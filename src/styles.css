@@ -79,6 +79,7 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
 .app-shell { position: relative; width: 100%; height: 100%; }
 #map { position: absolute; inset: 0; background: #14171b; }
 .leaflet-container { background: #14171b; font-family: inherit; }
+.leaflet-panoPointsPane-pane, .leaflet-panoPointsPane-pane * { pointer-events: none !important; }
 
 .columns {
   position: absolute;

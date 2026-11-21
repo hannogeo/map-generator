@@ -23,6 +23,27 @@ pub struct TimeEntry {
     pub date: String,
 }
 
+/// One panorama point from a Google photometa tile. Entries without a
+/// resolvable pano id still have coordinates and are useful for the close-zoom
+/// coverage dots, so the id may be empty.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PanoDot {
+    pub pano_id: String,
+    pub lat: f64,
+    pub lng: f64,
+}
+
+/// Dots grouped by the z17 tile they came from, so the UI can cache each tile
+/// independently as the viewport moves.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanoDotTile {
+    pub x: u32,
+    pub y: u32,
+    pub dots: Vec<PanoDot>,
+}
+
 /// Provider independent panorama metadata. Field names mirror the browser
 /// reference implementation so that filters and exports stay compatible.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

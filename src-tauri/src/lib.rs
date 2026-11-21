@@ -23,6 +23,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::start_generation,
             commands::stop_generation,
+            commands::fetch_pano_dots,
             commands::update_goals,
             commands::search_places,
             commands::fetch_text,

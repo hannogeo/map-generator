@@ -11,8 +11,11 @@ use crate::geo::{accepts_curve, distance_between, random_in_range, LatLng, PolyR
 use crate::models::{Marker, MarkerExtra, Pano, Settings, TimeEntry};
 use crate::providers::{FetchResult, FetchStatus, PanoRequest, Providers};
 use crate::tiles::{has_blue_line_at, tile_color_matches};
+use futures::stream::{FuturesUnordered, StreamExt};
 use rand::seq::SliceRandom;
 use std::collections::{HashSet, VecDeque};
+use std::future::Future;
+use std::sync::Mutex;
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
@@ -372,10 +375,23 @@ impl<'a> Filters<'a> {
 
     /// Sample one random or grid coordinate.
     ///
-    /// Returns every panorama that the reference would add to the polygon for
-    /// this coordinate, in discovery order. An empty result means the sample
-    /// did not pass the filters.
-    pub async fn candidates(&self, lat: f64, lng: f64, found: &[LatLng]) -> Vec<Pano> {
+    /// Each panorama is passed to `on_candidate` as soon as it is resolved,
+    /// instead of waiting for the whole linked-pano traversal to finish. The
+    /// callback returns `false` to stop the traversal (goal reached or stop
+    /// requested). The returned vector is kept for callers that need the full
+    /// batch; generation consumes the streamed callbacks.
+    pub async fn candidates<F, Fut>(
+        &self,
+        lat: f64,
+        lng: f64,
+        found: &[LatLng],
+        claimed: &Mutex<HashSet<String>>,
+        on_candidate: F,
+    ) -> Vec<Pano>
+    where
+        F: FnMut(Pano) -> Fut,
+        Fut: Future<Output = bool>,
+    {
         let mut res = match self
             .providers
             .fetch(
@@ -485,7 +501,7 @@ impl<'a> Filters<'a> {
             let Some(night) = res.short_description.clone() else {
                 return Vec::new();
             };
-            return self.collect(vec![(night, 0)]).await;
+            return self.collect(vec![(night, 0)], claimed, on_candidate).await;
         }
 
         if self.settings.filter_by_minutes.enabled && !self.provider().contains("google") {
@@ -553,7 +569,7 @@ impl<'a> Filters<'a> {
             }
         }
 
-        self.collect(starts).await
+        self.collect(starts, claimed, on_candidate).await
     }
 
     async fn non_badcam(&self, pano_id: &str) -> Option<Pano> {
@@ -790,79 +806,98 @@ impl<'a> Filters<'a> {
         }
     }
 
-    /// Breadth-first equivalent of `getPanoDeep`.
-    async fn collect(&self, starts: Vec<(String, u32)>) -> Vec<Pano> {
+    /// Breadth-first equivalent of `getPanoDeep`, streaming accepted panoramas
+    /// through `on_candidate` as soon as each request resolves. `claimed` is
+    /// shared across the whole run: an id that is already claimed (including
+    /// every location already found) ends that branch instead of being walked
+    /// through again. Up to 16 requests stay in flight.
+    async fn collect<F, Fut>(
+        &self,
+        starts: Vec<(String, u32)>,
+        claimed: &Mutex<HashSet<String>>,
+        mut on_candidate: F,
+    ) -> Vec<Pano>
+    where
+        F: FnMut(Pano) -> Fut,
+        Fut: Future<Output = bool>,
+    {
         let max_depth = self.settings.links_depth;
-        let mut checked: HashSet<String> = HashSet::new();
         let mut queue: VecDeque<(String, u32)> = VecDeque::new();
         for (id, depth) in starts {
-            if depth <= max_depth && checked.insert(id.clone()) {
+            if depth <= max_depth && claim_pano(claimed, &id) {
                 queue.push_back((id, depth));
             }
         }
 
         let mut out: Vec<Pano> = Vec::new();
         let mut out_ids: HashSet<String> = HashSet::new();
+        let mut in_flight = FuturesUnordered::new();
 
-        while !queue.is_empty() {
-            let take = queue.len().min(16);
-            let wave: Vec<(String, u32)> = queue.drain(..take).collect();
-            let results = futures::future::join_all(wave.into_iter().map(|(id, depth)| async move {
-                let pano = self.fetch_by_pano(&id).await;
-                (id, depth, pano)
-            }))
-            .await;
+        while !queue.is_empty() || !in_flight.is_empty() {
+            while in_flight.len() < 16 {
+                let Some((id, depth)) = queue.pop_front() else {
+                    break;
+                };
+                in_flight.push(async move {
+                    let pano = self.fetch_by_pano(&id).await;
+                    (id, depth, pano)
+                });
+            }
 
-            for (_id, depth, pano) in results {
-                let Some(pano) = pano else { continue };
-                let in_country = self.rings.contains(pano.lat, pano.lng);
-                let good = in_country && self.is_pano_good(&pano, &[]).await;
-                let next_depth = if good { 1 } else { depth + 1 };
+            let Some((_id, depth, pano)) = in_flight.next().await else {
+                break;
+            };
+            let Some(pano) = pano else { continue };
+            let in_country = self.rings.contains(pano.lat, pano.lng);
+            let good = in_country && self.is_pano_good(&pano, &[]).await;
+            let next_depth = if good { 1 } else { depth + 1 };
 
-                if self.check_all_dates && !self.settings.select_months {
-                    for entry in &pano.time {
-                        if self.settings.reject_unofficial
-                            && !is_official(&entry.pano, self.provider())
-                        {
-                            continue;
-                        }
-                        if let Some(date) = time_entry_ms(entry) {
-                            if date >= self.from_ms && date <= self.to_ms {
-                                enqueue(
-                                    &mut queue,
-                                    &mut checked,
-                                    &entry.pano,
-                                    next_depth,
-                                    max_depth,
-                                );
-                            }
+            if self.check_all_dates && !self.settings.select_months {
+                for entry in &pano.time {
+                    if self.settings.reject_unofficial
+                        && !is_official(&entry.pano, self.provider())
+                    {
+                        continue;
+                    }
+                    if let Some(date) = time_entry_ms(entry) {
+                        if date >= self.from_ms && date <= self.to_ms {
+                            enqueue(
+                                &mut queue,
+                                claimed,
+                                &entry.pano,
+                                next_depth,
+                                max_depth,
+                            );
                         }
                     }
                 }
+            }
 
-                if self.settings.check_links {
-                    for link in &pano.links {
-                        enqueue(
-                            &mut queue,
-                            &mut checked,
-                            &link.pano,
-                            next_depth,
-                            max_depth,
-                        );
-                    }
-                    for entry in &pano.time {
-                        enqueue(
-                            &mut queue,
-                            &mut checked,
-                            &entry.pano,
-                            next_depth,
-                            max_depth,
-                        );
-                    }
+            if self.settings.check_links {
+                for link in &pano.links {
+                    enqueue(
+                        &mut queue,
+                        claimed,
+                        &link.pano,
+                        next_depth,
+                        max_depth,
+                    );
                 }
+                for entry in &pano.time {
+                    enqueue(
+                        &mut queue,
+                        claimed,
+                        &entry.pano,
+                        next_depth,
+                        max_depth,
+                    );
+                }
+            }
 
-                if good && out_ids.insert(pano.pano_id.clone()) {
-                    out.push(pano);
+            if good && out_ids.insert(pano.pano_id.clone()) {
+                out.push(pano.clone());
+                if !on_candidate(pano).await {
+                    break;
                 }
             }
         }
@@ -1018,14 +1053,24 @@ impl<'a> Filters<'a> {
     }
 }
 
+fn claim_pano(claimed: &Mutex<HashSet<String>>, id: &str) -> bool {
+    if id.is_empty() {
+        return false;
+    }
+    claimed
+        .lock()
+        .map(|mut claimed| claimed.insert(id.to_string()))
+        .unwrap_or(false)
+}
+
 fn enqueue(
     queue: &mut VecDeque<(String, u32)>,
-    checked: &mut HashSet<String>,
+    claimed: &Mutex<HashSet<String>>,
     id: &str,
     depth: u32,
     max_depth: u32,
 ) {
-    if depth <= max_depth && !id.is_empty() && checked.insert(id.to_string()) {
+    if depth <= max_depth && claim_pano(claimed, id) {
         queue.push_back((id.to_string(), depth));
     }
 }
@@ -1254,5 +1299,19 @@ mod tests {
         };
         assert_eq!(filters.generation_allows(&old), None);
         assert!(filters.capture_matches(&old));
+    }
+
+    #[test]
+    fn claimed_locations_end_walks() {
+        let claimed = Mutex::new(HashSet::from(["existing".to_string()]));
+        let mut queue = VecDeque::new();
+
+        enqueue(&mut queue, &claimed, "existing", 1, 2);
+        assert!(queue.is_empty(), "an existing location must not be walked into");
+
+        enqueue(&mut queue, &claimed, "new", 1, 2);
+        assert_eq!(queue.len(), 1);
+        enqueue(&mut queue, &claimed, "new", 1, 2);
+        assert_eq!(queue.len(), 1, "an id must only be claimed once");
     }
 }
