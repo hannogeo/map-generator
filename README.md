@@ -32,7 +32,7 @@ Everything is saved automatically and persists between sessions: provider, radiu
 
 ## Notifications
 
-Optional desktop (and Discord webhook) notifications when a location is found, a polygon is complete, or all polygons are complete.
+Optional desktop (and Discord webhook) notifications when a location is found, a polygon is complete, or all polygons are complete. Discord location notifications include a VirtualStreets update report copied from the Google StreetView Toolkit userscript: country flag, update tags, capture month, place line and shortened panorama link.
 
 ## Performance
 

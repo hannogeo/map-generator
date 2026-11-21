@@ -139,6 +139,15 @@ pub struct Marker {
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_type: Option<String>,
+    /// Camera generation of the current pano, in the userscript's notation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+    /// Camera generation of the previous pano, used for update tags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_generation: Option<String>,
+    /// Whether the pano has any older capture in its history.
+    #[serde(default)]
+    pub has_history: bool,
     pub links: Vec<String>,
     pub extra: MarkerExtra,
     /// Only used client-side, never exported.

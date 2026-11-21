@@ -145,6 +145,52 @@ pub fn camera_generation(pano: &Pano, provider: &str) -> String {
     "0".to_string()
 }
 
+fn report_month(image_date: &str) -> Option<String> {
+    let (year, month) = parse_month(image_date)?;
+    Some(format!("{:04}-{:02}", year, month))
+}
+
+/// Camera generation in the notation used by the StreetView Toolkit's
+/// `getGeneration`, which drives VirtualStreets report tags.
+pub fn report_generation(pano: &Pano, provider: &str) -> String {
+    if !GOOGLE_PROVIDERS.contains(&provider) {
+        return "ari".to_string();
+    }
+
+    let country = pano.country.as_deref().unwrap_or("");
+    let image = pano.image_date.as_deref().and_then(report_month);
+
+    let generation = match pano.world_height {
+        8192 => "Gen4",
+        1664 => "Gen1",
+        6656 => {
+            if let Some(image) = image.as_deref() {
+                if image >= "2022-01" {
+                    "BadCam"
+                } else if gen3_date(country).is_some_and(|target| {
+                    image >= target && (country != "US" || pano.lat > 52.0)
+                }) {
+                    "BadCam"
+                } else {
+                    let gen2_country = GEN2_COUNTRIES.contains(&country)
+                        || GEN2_COUNTRIES_2.contains(&country)
+                        || country == "NO";
+                    if gen2_country && image <= "2011-11" {
+                        if image >= "2010-09" { "Gen2/3" } else { "Gen2" }
+                    } else {
+                        "Gen3"
+                    }
+                }
+            } else {
+                "Gen3"
+            }
+        }
+        _ => "ari",
+    };
+
+    generation.to_string()
+}
+
 /// `normalizeText` from the reference: lowercase, strip accents and
 /// punctuation (hyphens and whitespace survive).
 pub fn normalize_text(text: &str) -> String {
@@ -993,6 +1039,9 @@ impl<'a> Filters<'a> {
             image_date: pano.image_date.clone(),
             source: format!("{}_pano", if self.provider() == "tencent" { "qq" } else { self.provider() }),
             update_type: None,
+            generation: Some(report_generation(pano, self.provider())),
+            previous_generation: None,
+            has_history: pano.time.iter().any(|entry| entry.pano != pano.pano_id),
             links,
             extra: MarkerExtra {
                 tags: vec![self.provider().to_string()],
@@ -1010,6 +1059,7 @@ impl<'a> Filters<'a> {
             None
         };
 
+        let mut previous_generation = None;
         let (update_type, marker_type) = match previous {
             None => {
                 if !self.provider().contains("google") {
@@ -1030,12 +1080,11 @@ impl<'a> Filters<'a> {
                 if !self.provider().contains("google") {
                     (Some("gen4update"), Some("gen4"))
                 } else {
-                    let previous_height = self
-                        .fetch_by_pano(&previous_id)
-                        .await
-                        .map(|previous| previous.world_height)
-                        .unwrap_or(0);
-                    match previous_height {
+                    let previous_pano = self.fetch_by_pano(&previous_id).await;
+                    previous_generation = previous_pano
+                        .as_ref()
+                        .map(|previous| report_generation(previous, self.provider()));
+                    match previous_pano.map(|previous| previous.world_height).unwrap_or(0) {
                         1664 => (Some("gen1update"), Some("gen1")),
                         6656 => (Some("gen2or3update"), Some("gen2or3")),
                         _ => (Some("gen4update"), Some("gen4")),
@@ -1043,6 +1092,7 @@ impl<'a> Filters<'a> {
                 }
             }
         };
+        marker.previous_generation = previous_generation;
 
         if let Some(update_type) = update_type {
             marker.update_type = Some(update_type.to_string());
@@ -1130,6 +1180,26 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(camera_generation(&yandex, "yandex"), "1");
+    }
+
+    #[test]
+    fn report_generation_matches_userscript() {
+        let mut pano = Pano {
+            world_height: 6656,
+            country: Some("US".into()),
+            image_date: Some("2010-10".into()),
+            lat: 40.0,
+            ..Default::default()
+        };
+        assert_eq!(report_generation(&pano, "google"), "Gen2/3");
+        pano.image_date = Some("2022-01".into());
+        assert_eq!(report_generation(&pano, "google"), "BadCam");
+        pano.world_height = 8192;
+        assert_eq!(report_generation(&pano, "google"), "Gen4");
+        pano.world_height = 6656;
+        pano.country = Some("NO".into());
+        pano.image_date = Some("2010-01".into());
+        assert_eq!(report_generation(&pano, "google"), "Gen2");
     }
 
     #[test]

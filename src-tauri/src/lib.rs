@@ -7,6 +7,7 @@ pub mod land;
 pub mod models;
 pub mod protobuf;
 pub mod providers;
+pub mod reports;
 pub mod tiles;
 
 use commands::GenerationState;

@@ -16,6 +16,7 @@ use crate::models::{
     Goals, LocationEvent, Marker, PolygonDoneEvent, PolygonInput, ProgressEvent, Settings,
 };
 use crate::providers::Providers;
+use crate::reports::update_report;
 use crate::tiles::BlueLineMask;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::{HashMap, HashSet};
@@ -443,41 +444,40 @@ async fn try_add_marker(
         let discord_available = ctx.settings.provider.contains("google");
         let discord = discord_available && matches!(notification.target.as_str(), "discord" | "both");
         let desktop = !discord_available || notification.target.as_str() != "discord";
+        let needs_report = found_len == 1
+            && ((notification.any_location && discord)
+                || (notification.any_no_blue_line && is_no_blue && discord));
+        let report = if needs_report {
+            Some(update_report(&marker).await)
+        } else {
+            None
+        };
         if notification.any_location && found_len == 1 {
-            let link = format!(
-                "https://www.google.com/maps/@?api=1&map_action=pano&pano={}&heading={}&pitch={}&fov={}",
-                marker.pano_id,
-                marker.heading,
-                marker.pitch,
-                180.0 / 2.0_f64.powf(marker.zoom)
-            );
             send_notification(
                 &ctx.app,
                 &ctx.settings,
-                &format!("First location found in {} ({}s)", poly.name, elapsed_str),
+                &format!("Found first location in {} ({}s)", poly.name, elapsed_str),
                 "",
-                Some(&link),
+                None,
                 desktop,
                 discord,
+                report.as_deref(),
             )
             .await;
         }
         if notification.any_no_blue_line && is_no_blue && found_len == 1 {
-            let link = format!(
-                "https://www.google.com/maps/@?api=1&map_action=pano&pano={}&heading={}&pitch={}&fov={}",
-                marker.pano_id,
-                marker.heading,
-                marker.pitch,
-                180.0 / 2.0_f64.powf(marker.zoom)
-            );
             send_notification(
                 &ctx.app,
                 &ctx.settings,
-                &format!("No blue line location found in {} ({}s)", poly.name, elapsed_str),
+                &format!(
+                    "Found first no-blue-line location in {} ({}s)",
+                    poly.name, elapsed_str
+                ),
                 "",
-                Some(&link),
+                None,
                 desktop,
                 discord,
+                report.as_deref(),
             )
             .await;
         }
@@ -490,6 +490,7 @@ async fn try_add_marker(
                 None,
                 desktop,
                 discord,
+                None,
             )
             .await;
         }
@@ -502,6 +503,7 @@ async fn try_add_marker(
                 None,
                 desktop,
                 discord,
+                None,
             )
             .await;
         }
@@ -518,6 +520,7 @@ async fn send_notification(
     link: Option<&str>,
     desktop: bool,
     discord: bool,
+    report: Option<&str>,
 ) {
     if desktop {
         let _ = app.notification().builder().title(title).body(body).show();
@@ -525,10 +528,13 @@ async fn send_notification(
     if discord {
         if let Some(url) = settings.notification.discord_webhook.clone() {
             let client = reqwest::Client::new();
-            let content = match link {
-                Some(l) if body.is_empty() => format!("**{}**\n{}", title, l),
-                Some(l) => format!("**{}**\n{}\n{}", title, body, l),
-                None => format!("**{}**\n{}", title, body),
+            let content = match report {
+                Some(report) => format!("{}\n\n{}", title, report),
+                None => match link {
+                    Some(l) if body.is_empty() => format!("**{}**\n{}", title, l),
+                    Some(l) => format!("**{}**\n{}\n{}", title, body, l),
+                    None => format!("**{}**\n{}", title, body),
+                },
             };
             let _ = client
                 .post(url)

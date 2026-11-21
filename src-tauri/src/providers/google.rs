@@ -311,6 +311,9 @@ fn parse_root(root: &Value) -> Option<Pano> {
     let altitude = as_f64(idx(idx(loc, 1), 0));
     let country = as_str(idx(loc, 4)).map(str::to_string);
 
+    let road = as_str(idx(idx(idx(idx(idx(idx(meta, 12), 0), 0), 0), 2), 0))
+        .map(|s| s.to_string());
+
     let addr = idx(root, 3);
     let addr_full = as_str(idx(idx(idx(addr, 2), 1), 0))
         .or_else(|| as_str(idx(idx(idx(addr, 2), 0), 0)));
@@ -319,7 +322,18 @@ fn parse_root(root: &Value) -> Option<Pano> {
     if let Some(full) = addr_full {
         let parts: Vec<&str> = full.split(',').collect();
         if parts.len() > 1 {
-            locality = Some(parts[0].trim().to_string());
+            let first = parts[0].trim();
+            // Google often repeats the road as the first address component;
+            // keep the next component as the locality in that case.
+            let locality_part = if road
+                .as_deref()
+                .is_some_and(|road| road.eq_ignore_ascii_case(first))
+            {
+                parts.get(1).map(|part| part.trim())
+            } else {
+                Some(first)
+            };
+            locality = locality_part.map(str::to_string);
             region = Some(parts[parts.len() - 1].trim().to_string());
         } else {
             region = Some(full.trim().to_string());
@@ -402,8 +416,7 @@ fn parse_root(root: &Value) -> Option<Pano> {
         country,
         region,
         locality,
-        road: as_str(idx(idx(idx(idx(idx(idx(meta, 12), 0), 0), 0), 2), 0))
-            .map(|s| s.to_string()),
+        road,
         description,
         short_description: short_desc_raw.map(|s| s.to_string()),
         image_date,
@@ -472,6 +485,21 @@ mod tests {
         assert_eq!(pano.links[0].pano, "node-b");
         assert_eq!(pano.links[0].heading, 90.0);
         assert_eq!(pano.time.len(), 2);
+    }
+
+    #[test]
+    fn keeps_locality_when_address_repeats_the_road() {
+        let mut root = root_with_country("FR");
+        root[3] = json!([
+            null,
+            null,
+            [null, ["Rue de Test, Paris, Île-de-France, France"]]
+        ]);
+
+        let pano = parse_root(&root).expect("parsed");
+        assert_eq!(pano.road.as_deref(), Some("Rue de Test"));
+        assert_eq!(pano.locality.as_deref(), Some("Paris"));
+        assert_eq!(pano.region.as_deref(), Some("France"));
     }
 
     #[test]
