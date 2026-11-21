@@ -265,10 +265,7 @@ fn parse_root(root: &Value) -> Option<Pano> {
     );
 
     let altitude = as_f64(idx(idx(loc, 1), 0));
-    let country = match as_str(idx(loc, 4)) {
-        Some("TW") | Some("HK") | Some("MO") => Some("CN".to_string()),
-        other => other.map(|s| s.to_string()),
-    };
+    let country = as_str(idx(loc, 4)).map(str::to_string);
 
     let addr = idx(root, 3);
     let addr_full = as_str(idx(idx(idx(addr, 2), 1), 0))
@@ -382,9 +379,8 @@ fn parse_root(root: &Value) -> Option<Pano> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_minimal_metadata() {
-        let root = json!([
+    fn root_with_country(country: &str) -> Value {
+        json!([
             null,
             [null, "abcdefghijklmnopqrstuv"],
             [null, null, [1664, 3328]],
@@ -398,7 +394,7 @@ mod tests {
                         [35.0],
                         [123.0],
                         ["node-a", "node-b"],
-                        "FR"
+                        country
                     ],
                     null,
                     [[[[null, "abcdefghijklmnopqrstuv"]], [[null, "node-b"]]]],
@@ -414,8 +410,12 @@ mod tests {
                 ]
             ],
             [null, null, null, null, null, [null, null, "launch"], null, [2021, 5]]
-        ]);
-        let pano = parse_root(&root).expect("parsed");
+        ])
+    }
+
+    #[test]
+    fn parses_minimal_metadata() {
+        let pano = parse_root(&root_with_country("FR")).expect("parsed");
         assert_eq!(pano.pano_id, "abcdefghijklmnopqrstuv");
         assert_eq!(pano.image_date.as_deref(), Some("2021-05"));
         assert_eq!(pano.country.as_deref(), Some("FR"));
@@ -428,6 +428,14 @@ mod tests {
         assert_eq!(pano.links[0].pano, "node-b");
         assert_eq!(pano.links[0].heading, 90.0);
         assert_eq!(pano.time.len(), 2);
+    }
+
+    #[test]
+    fn keeps_tw_hk_mo_country_codes() {
+        for code in ["TW", "HK", "MO"] {
+            let pano = parse_root(&root_with_country(code)).expect("parsed");
+            assert_eq!(pano.country.as_deref(), Some(code));
+        }
     }
 
     #[test]
