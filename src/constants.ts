@@ -1,3 +1,5 @@
+import type { CoverageMode } from './types'
+
 // Keyless Google Maps raster tiles, as used by the browser reference app.
 export const GOOGLE_ROADMAP =
   'https://www.google.com/maps/vt?pb=!1m7!8m6!1m3!1i{z}!2i{x}!3i{y}!2i9!3x1!2m2!1e0!2sm!3m7!2sen!3sus!5e1105!12m1!1e3!12m1!1e2!4e0!5m5!1e0!8m2!1e1!1e1!8i47083502!6m6!1e12!2i2!11e0!39b0!44e0!50e0'
@@ -16,8 +18,13 @@ const STREETVIEW_OFFICIAL =
   'https://maps.googleapis.com/maps/vt?pb=%211m5%211m4%211i{z}%212i{x}%213i{y}%214i256%212m8%211e2%212ssvv%214m2%211scc%212s*211m3*211e2*212b1*213e2*212b1%214m2%211ssvl%212s*212b1%213m16%212sen%213sUS%2112m4%211e68%212m2%211sset%212sRoadmap%2112m3%211e37%212m1%211ssmartmaps%2112m4%211e26'
 const STREETVIEW_ALL =
   'https://maps.googleapis.com/maps/vt?pb=%211m5%211m4%211i{z}%212i{x}%213i{y}%214i256%212m8%211e2%212ssvv%214m2%211scc%212s*211m3*211e2*212b1*213e2*211m3*211e3*212b1*213e2*211m3*211e10*212b1*213e2*212b1%214m2%211ssvl%212s*212b1%213m16%212sen%213sUS%2112m4%211e68%212m2%211sset%212sRoadmap%2112m3%211e37%212m1%211ssmartmaps%2112m4%211e26'
-const STREETVIEW_BLOBBY =
-  'https://maps.googleapis.com/maps/vt?pb=!1m5!1m4!1i{z}!2i{x}!3i{y}!4i256!2m8!1e2!2ssvv%214m2%211scc%212s*211m3*211e2*212b1*213e2*212b1%214m2%211ssvl%212s*21%213m16%212sen%213sUS%2112m4%211e68%212m2%211sset%212sRoadmap%2112m3%211e37%212m1%211ssmartmaps%2112m4%211e26%212m2%211sstyles%212sp.c%3A%23{strokeColor}%215m1%215f1.35'
+// The `cc` value lists the imagery collections to draw: 2 = official,
+// 3 = user-uploaded, 10 = other unofficial. Unofficial keeps only 3 and 10.
+const STREETVIEW_UNOFFICIAL =
+  'https://maps.googleapis.com/maps/vt?pb=%211m5%211m4%211i{z}%212i{x}%213i{y}%214i256%212m8%211e2%212ssvv%214m2%211scc%212s*211m3*211e3*212b1*213e2*211m3*211e10*212b1*213e2*212b1%214m2%211ssvl%212s*212b1%213m16%212sen%213sUS%2112m4%211e68%212m2%211sset%212sRoadmap%2112m3%211e37%212m1%211ssmartmaps%2112m4%211e26'
+
+const STREETVIEW_BLOBBY_STYLES =
+  '%212m2%211sstyles%212sp.c%3A%23{strokeColor}%215m1%215f1.35'
 
 export const COLOR_SCHEMES: Record<string, [string, string]> = {
   Default: ['1098ad', '99e9f2'],
@@ -36,19 +43,26 @@ export const COLOR_SCHEMES: Record<string, [string, string]> = {
 }
 
 export interface CoverageStyle {
-  official: boolean
+  mode: CoverageMode
   blobby?: boolean
   scheme?: string
   lineWidth?: number
   strokeWidth?: number
 }
 
+function coverageBase(mode: CoverageMode): string {
+  if (mode === 'official') return STREETVIEW_OFFICIAL
+  if (mode === 'unofficial') return STREETVIEW_UNOFFICIAL
+  return STREETVIEW_ALL
+}
+
 export function streetViewUrl(style: CoverageStyle): string {
   const [stroke, fill] = COLOR_SCHEMES[style.scheme || 'Default'] || COLOR_SCHEMES.Default
+  const base = coverageBase(style.mode)
   if (style.blobby) {
-    return STREETVIEW_BLOBBY.replaceAll('{strokeColor}', stroke)
+    const blobby = base.replace(/(%211ssvl%212s)[^%]*/, '$1*21')
+    return (blobby + STREETVIEW_BLOBBY_STYLES).replaceAll('{strokeColor}', stroke)
   }
-  const base = style.official ? STREETVIEW_OFFICIAL : STREETVIEW_ALL
   const lineWidth = style.lineWidth ?? 1
   const strokeWidth = style.strokeWidth ?? 3
   return (base + STREETVIEW_STYLES)

@@ -14,41 +14,20 @@
           <div class="body">
             <div class="field">
               <span>Map theme</span>
-              <select v-model="settings.mapTheme" @change="setBase(settings.mapTheme)">
-                <option value="default">Default</option>
-                <option value="dark">Dark</option>
-                <option value="night">Night</option>
-                <option value="classic">Classic</option>
-                <option value="retro">Retro</option>
-                <option value="aubergine">Aubergine</option>
-                <option value="satellite">Satellite</option>
-                <option value="terrain">Terrain</option>
-                <option value="carto">Carto</option>
-                <option value="osm">OSM</option>
-              </select>
+              <AppSelect v-model="settings.mapTheme" :options="themeOptions" aria-label="Map theme" @change="setBase(settings.mapTheme)" />
             </div>
             <div class="field">
               <span>Street View overlay</span>
-              <select v-model="settings.coverage.enabled" @change="applyCoverage">
-                <option :value="true">On</option>
-                <option :value="false">Off</option>
-              </select>
+              <AppSelect v-model="settings.coverage.enabled" :options="onOffOptions" aria-label="Street View overlay" @change="applyCoverage" />
             </div>
             <div class="nested" v-if="settings.coverage.enabled">
               <div class="field">
                 <span>Coverage</span>
-                <select v-model="settings.coverage.official" @change="applyCoverage">
-                  <option :value="true">Official</option>
-                  <option :value="false">All</option>
-                </select>
+                <AppSelect v-model="settings.coverage.mode" :options="coverageModeOptions" aria-label="Coverage" @change="applyCoverage" />
               </div>
               <div class="field">
-                <span>Colour scheme</span>
-                <select v-model="settings.coverage.colorScheme" @change="applyCoverage">
-                  <option v-for="(_, name) in COLOR_SCHEMES" :key="name" :value="name">
-                    {{ String(name).replaceAll('_', ' ') }}
-                  </option>
-                </select>
+                <span>Color scheme</span>
+                <AppSelect v-model="settings.coverage.colorScheme" :options="colorSchemeOptions" aria-label="Color scheme" @change="applyCoverage" />
               </div>
               <label class="check">
                 <input type="checkbox" v-model="settings.coverage.blobby" @change="applyCoverage" />
@@ -64,10 +43,7 @@
             </div>
             <div class="field">
               <span>Notifications</span>
-              <select v-model="settings.notification.enabled" @change="onNotificationToggle">
-                <option :value="true">On</option>
-                <option :value="false">Off</option>
-              </select>
+              <AppSelect v-model="settings.notification.enabled" :options="onOffOptions" aria-label="Notifications" @change="onNotificationToggle" />
             </div>
             <div class="nested" v-if="settings.notification.enabled">
               <label class="check"><input type="checkbox" v-model="settings.notification.anyLocation" /> First location in polygon</label>
@@ -76,11 +52,7 @@
               <label class="check"><input type="checkbox" v-model="settings.notification.allPolygonsComplete" /> All polygons complete</label>
               <div class="field">
                 <span>Send to</span>
-                <select v-model="settings.notification.target" @change="onNotificationToggle">
-                  <option value="desktop">Desktop</option>
-                  <option value="discord" :disabled="!isGoogle">Discord</option>
-                  <option value="both" :disabled="!isGoogle">Both</option>
-                </select>
+                <AppSelect v-model="settings.notification.target" :options="notificationTargetOptions" aria-label="Send notifications to" @change="onNotificationToggle" />
               </div>
               <div class="field" v-if="isGoogle && settings.notification.target !== 'desktop'">
                 <span>Webhook</span>
@@ -214,24 +186,15 @@
           <div class="body">
             <div class="field">
               <span>Provider</span>
-              <select v-model="settings.provider" @change="onProviderChange">
-                <option v-for="p in providers" :key="p" :value="p">{{ providerLabel(p) }}</option>
-              </select>
+              <AppSelect v-model="settings.provider" :options="providerOptions" aria-label="Provider" @change="onProviderChange" />
             </div>
             <div class="field">
               <span>Pano ID</span>
-              <select v-model="settings.panoId">
-                <option value="enable">Enable</option>
-                <option value="disable">Disable</option>
-                <option value="prefix">Prefix</option>
-              </select>
+              <AppSelect v-model="settings.panoId" :options="panoIdOptions" aria-label="Pano ID" />
             </div>
             <div class="field">
               <span>Strategy</span>
-              <select v-model="settings.strategy">
-                <option value="random">Random</option>
-                <option value="grid">Grid</option>
-              </select>
+              <AppSelect v-model="settings.strategy" :options="strategyOptions" aria-label="Strategy" />
             </div>
             <div class="field">
               <span>Generators</span>
@@ -270,10 +233,7 @@
             <div class="nested" v-if="settings.findByAuthor.enabled && !settings.rejectUnofficial && !settings.rejectOfficial">
               <div class="field">
                 <span>Include / exclude</span>
-                <select v-model="settings.findByAuthor.filterType">
-                  <option value="include">include</option>
-                  <option value="exclude">exclude</option>
-                </select>
+                <AppSelect v-model="settings.findByAuthor.filterType" :options="filterTypeOptions" aria-label="Author filter type" />
               </div>
               <input type="text" v-model.trim="settings.findByAuthor.author" placeholder="Author name" />
             </div>
@@ -319,15 +279,11 @@
             <div class="nested" v-if="settings.selectMonths">
               <div class="field">
                 <span>From month</span>
-                <select v-model="settings.fromMonth">
-                  <option v-for="m in months" :key="m.value" :value="m.value">{{ m.label }}</option>
-                </select>
+                <AppSelect v-model="settings.fromMonth" :options="months" aria-label="From month" />
               </div>
               <div class="field">
                 <span>To month</span>
-                <select v-model="settings.toMonth">
-                  <option v-for="m in months" :key="m.value" :value="m.value">{{ m.label }}</option>
-                </select>
+                <AppSelect v-model="settings.toMonth" :options="months" aria-label="To month" />
               </div>
               <div class="field">
                 <span>From year</span>
@@ -362,21 +318,12 @@
             <div class="nested" v-if="settings.searchInDescription.enabled">
               <div class="field">
                 <span>Include / exclude</span>
-                <select v-model="settings.searchInDescription.filterType">
-                  <option value="include">include</option>
-                  <option value="exclude">exclude</option>
-                </select>
+                <AppSelect v-model="settings.searchInDescription.filterType" :options="filterTypeOptions" aria-label="Description filter type" />
               </div>
               <input type="text" v-model.trim="settings.searchInDescription.searchTerms" placeholder="Terms, comma separated" />
               <div class="field">
                 <span>Search mode</span>
-                <select v-model="settings.searchInDescription.searchMode">
-                  <option value="contains">contains</option>
-                  <option value="fullword">fullword</option>
-                  <option value="sectionmatch">sectionmatch</option>
-                  <option value="startswith">startswith</option>
-                  <option value="endswith">endswith</option>
-                </select>
+                <AppSelect v-model="settings.searchInDescription.searchMode" :options="searchModeOptions" aria-label="Search mode" />
               </div>
             </div>
             <label class="check"><input type="checkbox" v-model="settings.filterByLinksLength.enabled" /> Filter by links length</label>
@@ -461,7 +408,7 @@
           <button class="primary big" :disabled="!polygons.length" @click="toggleRun">
             {{ running ? (stopping ? 'Stopping…' : 'Stop generation') : 'Start generation' }}
           </button>
-          <button class="big danger" @click="resetGeneration">Reset</button>
+          <button class="big danger" :disabled="!markers.length" @click="resetGeneration">Reset</button>
         </div>
       </div>
     </div>
@@ -566,6 +513,8 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
 import L from 'leaflet'
+import AppSelect from './components/AppSelect.vue'
+import type { SelectOption, SelectValue } from './components/select'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -604,6 +553,10 @@ import {
 
 type MarkerRecord = Marker & { polygonId?: string }
 
+function selectOptions<T extends SelectValue>(options: SelectOption<T>[]): SelectOption<T>[] {
+  return options
+}
+
 const appVersion = versionJson.version
 
 const providers = [
@@ -619,14 +572,55 @@ const providerNames: Record<string, string> = {
 const altitudeProviders = ['google', 'googleZoom', 'bing', 'naver', 'mapillary', 'baidu', 'mapycz', 'asig', 'tencent']
 const PANO_DOTS_ZOOM = 17
 const PANO_DOT_TILE_ZOOM = 17
-const months = [
+const months = selectOptions([
   { value: '01', label: 'January' }, { value: '02', label: 'February' },
   { value: '03', label: 'March' }, { value: '04', label: 'April' },
   { value: '05', label: 'May' }, { value: '06', label: 'June' },
   { value: '07', label: 'July' }, { value: '08', label: 'August' },
   { value: '09', label: 'September' }, { value: '10', label: 'October' },
   { value: '11', label: 'November' }, { value: '12', label: 'December' },
-]
+])
+const themeOptions = selectOptions([
+  { value: 'default', label: 'Default' }, { value: 'dark', label: 'Dark' },
+  { value: 'night', label: 'Night' }, { value: 'classic', label: 'Classic' },
+  { value: 'retro', label: 'Retro' }, { value: 'aubergine', label: 'Aubergine' },
+  { value: 'satellite', label: 'Satellite' }, { value: 'terrain', label: 'Terrain' },
+  { value: 'carto', label: 'Carto' }, { value: 'osm', label: 'OSM' },
+])
+const onOffOptions = selectOptions([
+  { value: true, label: 'On' }, { value: false, label: 'Off' },
+])
+const coverageModeOptions = selectOptions([
+  { value: 'official', label: 'Official' },
+  { value: 'unofficial', label: 'Unofficial' },
+  { value: 'all', label: 'All' },
+])
+const panoIdOptions = selectOptions([
+  { value: 'enable', label: 'Enable' },
+  { value: 'disable', label: 'Disable' },
+  { value: 'prefix', label: 'Prefix' },
+])
+const strategyOptions = selectOptions([
+  { value: 'random', label: 'Random' }, { value: 'grid', label: 'Grid' },
+])
+const filterTypeOptions = selectOptions([
+  { value: 'include', label: 'include' }, { value: 'exclude', label: 'exclude' },
+])
+const searchModeOptions = selectOptions([
+  { value: 'contains', label: 'contains' },
+  { value: 'fullword', label: 'fullword' },
+  { value: 'sectionmatch', label: 'sectionmatch' },
+  { value: 'startswith', label: 'startswith' },
+  { value: 'endswith', label: 'endswith' },
+])
+const colorSchemeOptions = computed(() => Object.entries(COLOR_SCHEMES).map(([name, colors]) => ({
+  value: name,
+  label: name.replaceAll('_', ' '),
+  colors,
+})))
+const providerOptions = computed(() => selectOptions(
+  providers.map(provider => ({ value: provider, label: providerLabel(provider) })),
+))
 
 const settings = ref<Settings>(loadSettings())
 const polygons = ref<Polygon[]>([])
@@ -683,6 +677,11 @@ const updateProgress = ref(-1)
 const updateError = ref('')
 
 const isGoogle = computed(() => settings.value.provider.includes('google'))
+const notificationTargetOptions = computed(() => selectOptions([
+  { value: 'desktop', label: 'Desktop' },
+  { value: 'discord', label: 'Discord', disabled: !isGoogle.value },
+  { value: 'both', label: 'Both', disabled: !isGoogle.value },
+]))
 const radiusVisible = computed(() => !['apple', 'naver', 'yandex', 'googleZoom'].includes(settings.value.provider))
 
 let map: L.Map
@@ -1119,7 +1118,7 @@ function applyCoverage() {
   const coverage = settings.value.coverage
   if (!coverage.enabled) return
   const url = streetViewUrl({
-    official: coverage.official,
+    mode: coverage.mode,
     blobby: coverage.blobby,
     scheme: coverage.colorScheme,
   })
@@ -1149,6 +1148,7 @@ function toggleMarkerLayer() {
     void refreshPanoDots()
   } else {
     map.removeLayer(markerLayer)
+    removeEmptyMarkerRenderer()
     map.removeLayer(panoDotLayer)
   }
 }
@@ -1632,6 +1632,13 @@ function markerVisible(marker: Marker) {
   }
 }
 
+/** An empty canvas renderer still covers the map and swallows country clicks. */
+function removeEmptyMarkerRenderer() {
+  if (markerLayer.getLayers().length === 0 && map.hasLayer(markerRenderer)) {
+    map.removeLayer(markerRenderer)
+  }
+}
+
 function addMarkerToMap(marker: MarkerRecord) {
   const colour = markerColour(marker)
   const layer = L.circleMarker([marker.lat, marker.lng], {
@@ -1658,6 +1665,7 @@ function removeMarkerRecord(marker: MarkerRecord) {
   if (entryIndex >= 0) {
     markerLayer.removeLayer(markerLayers[entryIndex].layer)
     markerLayers.splice(entryIndex, 1)
+    removeEmptyMarkerRenderer()
   }
 }
 
@@ -1666,6 +1674,7 @@ function refreshMarkerVisibility() {
     if (markerVisible(marker)) layer.addTo(markerLayer)
     else markerLayer.removeLayer(layer)
   })
+  removeEmptyMarkerRenderer()
   saveSettings(settings.value)
 }
 
@@ -1950,6 +1959,7 @@ function setProgressStatus(text: string) {
 }
 
 async function resetGeneration() {
+  if (!markers.value.length) return
   if (running.value) await stop()
   confirmOpen.value = true
 }
@@ -1971,6 +1981,7 @@ function clearGenerationState() {
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
+  removeEmptyMarkerRenderer()
   panoDotLayer.clearLayers()
   markersVisible.value = true
   markerLayer.addTo(map)
@@ -2220,6 +2231,7 @@ function clearAllLocations() {
   markers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
+  removeEmptyMarkerRenderer()
   persistPolygons()
 }
 

@@ -8,7 +8,7 @@ export const defaultSettings: Settings = {
   useLandMask: true,
   numOfGenerators: 1,
   mapTheme: 'default',
-  coverage: { enabled: true, official: true, blobby: false, colorScheme: 'Default', opacity: 1 },
+  coverage: { enabled: true, mode: 'official', blobby: false, colorScheme: 'Default', opacity: 1 },
   rejectUnofficial: true,
   rejectOfficial: false,
   rejectRoadName: false,
@@ -73,6 +73,12 @@ export function loadSettings(): Settings {
       const oldNotification = saved?.notification
       if (oldNotification && !oldNotification.target && typeof oldNotification.sendToDiscord === 'boolean') {
         oldNotification.target = oldNotification.sendToDiscord ? 'both' : 'desktop'
+      }
+      // The coverage toggle used to be an `official` boolean (true = official,
+      // false = all). Keep those saved choices when moving to the three-way mode.
+      const oldCoverage = saved?.coverage
+      if (oldCoverage && oldCoverage.mode === undefined && typeof oldCoverage.official === 'boolean') {
+        oldCoverage.mode = oldCoverage.official ? 'official' : 'all'
       }
       return mergeSettings(defaultSettings, saved)
     }

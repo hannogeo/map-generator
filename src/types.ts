@@ -40,6 +40,8 @@ export interface Polygon {
   countryCode?: string
 }
 
+export type CoverageMode = 'official' | 'unofficial' | 'all'
+
 export interface Settings {
   provider: string
   radius: number
@@ -48,7 +50,7 @@ export interface Settings {
   useLandMask: boolean
   numOfGenerators: number
   mapTheme: string
-  coverage: { enabled: boolean; official: boolean; blobby: boolean; colorScheme: string; opacity: number }
+  coverage: { enabled: boolean; mode: CoverageMode; blobby: boolean; colorScheme: string; opacity: number }
   rejectUnofficial: boolean
   rejectOfficial: boolean
   rejectRoadName: boolean
