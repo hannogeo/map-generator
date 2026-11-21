@@ -644,13 +644,20 @@ const status = ref('Ready')
 const drawing = ref(false)
 // Leaflet layers must stay raw: Vue's deep proxies break their internal
 // identity checks and they stop following zoom/pan.
+interface EditHandle {
+  marker: L.Marker
+  latlng: L.LatLng
+}
+
 const drawPoints = shallowRef<L.LatLng[]>([])
 const drawLine = shallowRef<L.Polyline | null>(null)
+const drawPreviewLine = shallowRef<L.Polyline | null>(null)
 const drawMarkers = shallowRef<L.CircleMarker[]>([])
 const editing = ref<Polygon | null>(null)
-const editMarkers = shallowRef<L.Marker[]>([])
+const editHandles = shallowRef<EditHandle[]>([])
 const editPoints = shallowRef<L.LatLng[]>([])
 const editLine = shallowRef<L.Polygon | null>(null)
+const edgeHandle = shallowRef<L.Marker | null>(null)
 const currentZoom = ref(3)
 const countryQuery = ref('')
 const countryFeatures = ref<any[]>([])
@@ -662,6 +669,15 @@ const showWebhook = ref(false)
 const markersVisible = ref(true)
 const totalGoal = computed(() => polygons.value.reduce((sum, polygon) => sum + (Number(polygon.nbNeeded) || 0), 0))
 let updateHandle: any = null
+let drawCursor: L.LatLng | null = null
+let drawFrame = 0
+let pendingDrawPoint: { x: number; y: number } | null = null
+let edgeHoverFrame = 0
+let pendingEdgePoint: { x: number; y: number } | null = null
+let edgeInsertIndex = -1
+let edgeLatlng: L.LatLng | null = null
+let edgeAddedHandle: EditHandle | null = null
+let edgeDragging = false
 const updating = ref(false)
 const updateProgress = ref(-1)
 const updateError = ref('')
@@ -815,6 +831,15 @@ onMounted(async () => {
   map.on('moveend', () => { void refreshPanoDots() })
   map.on('click', onMapClick)
   map.on('dblclick', onDblClick)
+  const mapContainer = map.getContainer()
+  mapContainer.addEventListener('mousemove', onDrawMouseMove)
+  mapContainer.addEventListener('mousemove', onEditMouseMove)
+  unlisteners.push(() => {
+    mapContainer.removeEventListener('mousemove', onDrawMouseMove)
+    mapContainer.removeEventListener('mousemove', onEditMouseMove)
+    if (drawFrame) cancelAnimationFrame(drawFrame)
+    if (edgeHoverFrame) cancelAnimationFrame(edgeHoverFrame)
+  })
 
   await loadCountries()
   loadSavedPolygonsLibrary()
@@ -1217,6 +1242,50 @@ function toggleCountryByIndex(index: number) {
   persistPolygons()
 }
 
+function stopDrawPreviewFrame() {
+  if (drawFrame) cancelAnimationFrame(drawFrame)
+  drawFrame = 0
+  pendingDrawPoint = null
+}
+
+function clearDrawPreview() {
+  stopDrawPreviewFrame()
+  if (!drawPreviewLine.value) return
+  map.removeLayer(drawPreviewLine.value as any)
+  drawPreviewLine.value = null
+}
+
+/** Shows the segment that would be added by the next click. */
+function refreshDrawPreview() {
+  const last = drawPoints.value[drawPoints.value.length - 1]
+  if (!drawing.value || !last || !drawCursor) {
+    clearDrawPreview()
+    return
+  }
+  const latlngs = [last, drawCursor]
+  if (drawPreviewLine.value) {
+    drawPreviewLine.value.setLatLngs(latlngs)
+  } else {
+    drawPreviewLine.value = markRaw(L.polyline(latlngs, {
+      pane: 'customPane', renderer: customRenderer, interactive: false,
+      color: '#e07a3f', weight: 2, opacity: 0.6,
+    }).addTo(map))
+  }
+}
+
+function onDrawMouseMove(event: MouseEvent) {
+  if (!drawing.value || !drawPoints.value.length) return
+  const rect = map.getContainer().getBoundingClientRect()
+  pendingDrawPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  if (drawFrame) return
+  drawFrame = requestAnimationFrame(() => {
+    drawFrame = 0
+    if (!pendingDrawPoint || !drawing.value || !drawPoints.value.length) return
+    drawCursor = markRaw(map.containerPointToLatLng(L.point(pendingDrawPoint.x, pendingDrawPoint.y)))
+    refreshDrawPreview()
+  })
+}
+
 function onMapClick(event: L.LeafletMouseEvent) {
   if (editing.value) return
   if (!drawing.value) return
@@ -1250,6 +1319,8 @@ function onMapClick(event: L.LeafletMouseEvent) {
       pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
     }).addTo(map))
   }
+  drawCursor = markRaw(event.latlng)
+  refreshDrawPreview()
   status.value = `Drawing · ${drawPoints.value.length} vertices`
 }
 
@@ -1268,6 +1339,7 @@ function removeLastDrawPoint() {
   } else if (drawLine.value) {
     drawLine.value.setLatLngs([...drawPoints.value])
   }
+  refreshDrawPreview()
   status.value = drawPoints.value.length
     ? `Drawing · ${drawPoints.value.length} vertices`
     : 'Click to place vertices · click first point or double-click to finish · Backspace to undo'
@@ -1279,6 +1351,8 @@ function toggleDraw() {
   else {
     drawing.value = true
     drawPoints.value = []
+    drawCursor = null
+    clearDrawPreview()
     map.doubleClickZoom.disable()
     map.getContainer().classList.add('is-drawing')
     map.getContainer().style.cursor = 'crosshair'
@@ -1320,6 +1394,8 @@ function cancelDrawing() {
     drawLine.value = null
   }
   drawPoints.value = []
+  drawCursor = null
+  clearDrawPreview()
   if (drawing.value) {
     drawing.value = false
     map.doubleClickZoom.enable()
@@ -1910,41 +1986,153 @@ function cancelReset() {
   confirmOpen.value = false
 }
 
-function makeEditMarker(pt: L.LatLng, idx: number): L.Marker {
-  const icon = L.divIcon({ className: 'edit-vertex', html: '', iconSize: [12, 12], iconAnchor: [6, 6] })
-  const marker = markRaw(L.marker(pt, { icon, draggable: true, pane: 'markersPane' } as any).addTo(map))
-  marker.on('drag', () => {
-    const next = [...editPoints.value]
-    next[idx] = markRaw(marker.getLatLng())
-    editPoints.value = next
-    if (editLine.value) editLine.value.setLatLngs(next)
+function vertexIcon(active: boolean): L.DivIcon {
+  return L.divIcon({
+    className: active ? 'edit-vertex' : 'edit-vertex edit-vertex--edge',
+    html: '', iconSize: [12, 12], iconAnchor: [6, 6],
   })
-  // Dropping a vertex splits its two neighbouring edges, leaving a new
-  // handle on each side so the shape can be refined further (matches the
-  // web editor's behaviour).
-  marker.on('dragend', () => {
-    const pts = [...editPoints.value]
-    const n = pts.length
-    if (n < 3 || idx >= n) return
-    const prevIdx = (idx - 1 + n) % n
-    const nextIdx = (idx + 1) % n
-    const midPrev = markRaw(L.latLng(
-      (pts[prevIdx].lat + pts[idx].lat) / 2,
-      (pts[prevIdx].lng + pts[idx].lng) / 2,
-    ))
-    const midNext = markRaw(L.latLng(
-      (pts[idx].lat + pts[nextIdx].lat) / 2,
-      (pts[idx].lng + pts[nextIdx].lng) / 2,
-    ))
-    const updated = [...pts]
-    updated.splice(idx + 1, 0, midNext)
-    updated.splice(idx, 0, midPrev)
-    editPoints.value = updated
-    rebuildEditMarkers()
+}
+
+function makeEditHandle(pt: L.LatLng): EditHandle {
+  const handle: EditHandle = {
+    marker: markRaw(L.marker(pt, {
+      icon: vertexIcon(true), draggable: true, pane: 'markersPane',
+    } as any).addTo(map)),
+    latlng: markRaw(pt),
+  }
+  handle.marker.on('drag', () => {
+    handle.latlng = markRaw(handle.marker.getLatLng())
+    const idx = editHandles.value.indexOf(handle)
+    if (idx < 0) return
+    const points = [...editPoints.value]
+    points[idx] = handle.latlng
+    editPoints.value = points
     if (editLine.value) editLine.value.setLatLngs([...editPoints.value])
   })
-  marker.on('dblclick', (e: any) => { L.DomEvent.stopPropagation(e); removeEditVertex(idx) })
+  handle.marker.on('dblclick', (e: any) => {
+    L.DomEvent.stopPropagation(e)
+    const idx = editHandles.value.indexOf(handle)
+    if (idx >= 0) removeEditVertex(idx)
+  })
+  return handle
+}
+
+function insertEditVertex(index: number, latlng: L.LatLng): EditHandle {
+  const handle = makeEditHandle(latlng)
+  const handles = [...editHandles.value]
+  handles.splice(index, 0, handle)
+  editHandles.value = handles
+  const points = [...editPoints.value]
+  points.splice(index, 0, markRaw(latlng))
+  editPoints.value = points
+  if (editLine.value) editLine.value.setLatLngs([...editPoints.value])
+  return handle
+}
+
+function hideEdgeHandle() {
+  if (edgeHandle.value && map.hasLayer(edgeHandle.value)) {
+    map.removeLayer(edgeHandle.value as any)
+  }
+  edgeInsertIndex = -1
+  edgeLatlng = null
+}
+
+function moveAddedHandle(latlng: L.LatLng) {
+  if (!edgeAddedHandle) return
+  edgeAddedHandle.latlng = markRaw(latlng)
+  edgeAddedHandle.marker.setLatLng(edgeAddedHandle.latlng)
+  const idx = editHandles.value.indexOf(edgeAddedHandle)
+  if (idx < 0) return
+  const points = [...editPoints.value]
+  points[idx] = edgeAddedHandle.latlng
+  editPoints.value = points
+  if (editLine.value) editLine.value.setLatLngs([...editPoints.value])
+}
+
+function ensureEdgeHandle(): L.Marker {
+  if (edgeHandle.value) return edgeHandle.value
+  const marker = markRaw(L.marker([0, 0], {
+    icon: vertexIcon(false), draggable: true, pane: 'markersPane', zIndexOffset: 1000,
+  } as any))
+  marker.on('click', (e: any) => {
+    L.DomEvent.stopPropagation(e)
+    if (edgeInsertIndex < 0 || !edgeLatlng) return
+    insertEditVertex(edgeInsertIndex + 1, edgeLatlng)
+    hideEdgeHandle()
+  })
+  marker.on('dragstart', () => {
+    edgeDragging = true
+    if (edgeInsertIndex < 0 || !edgeLatlng) return
+    edgeAddedHandle = insertEditVertex(edgeInsertIndex + 1, edgeLatlng)
+  })
+  marker.on('drag', () => moveAddedHandle(marker.getLatLng()))
+  marker.on('dragend', () => {
+    moveAddedHandle(marker.getLatLng())
+    edgeDragging = false
+    edgeAddedHandle = null
+    hideEdgeHandle()
+  })
+  edgeHandle.value = marker
   return marker
+}
+
+/** Finds the polygon edge under the cursor and the exact point on it. */
+function nearestEdge(point: L.Point): { index: number; latlng: L.LatLng } | null {
+  let best: { index: number; latlng: L.LatLng } | null = null
+  let bestDistance = Infinity
+  const points = editPoints.value
+  for (let i = 0; i < points.length; i++) {
+    const a = map.latLngToContainerPoint(points[i])
+    const b = map.latLngToContainerPoint(points[(i + 1) % points.length])
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const lengthSq = dx * dx + dy * dy
+    const t = lengthSq
+      ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq))
+      : 0
+    const px = a.x + t * dx
+    const py = a.y + t * dy
+    // Existing corners have their own handles; don't stack the add handle there.
+    if (Math.min(Math.hypot(point.x - a.x, point.y - a.y), Math.hypot(point.x - b.x, point.y - b.y)) < 8) continue
+    const distance = Math.hypot(point.x - px, point.y - py)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = { index: i, latlng: markRaw(map.containerPointToLatLng(L.point(px, py))) }
+    }
+  }
+  return bestDistance <= 14 ? best : null
+}
+
+function refreshEdgeHandle(point: L.Point) {
+  if (edgeDragging) return
+  const near = nearestEdge(point)
+  if (!near) {
+    hideEdgeHandle()
+    return
+  }
+  edgeInsertIndex = near.index
+  edgeLatlng = near.latlng
+  const marker = ensureEdgeHandle()
+  marker.setLatLng(near.latlng)
+  if (!map.hasLayer(marker)) marker.addTo(map)
+}
+
+function cancelEdgeHover() {
+  if (edgeHoverFrame) cancelAnimationFrame(edgeHoverFrame)
+  edgeHoverFrame = 0
+  pendingEdgePoint = null
+}
+
+function onEditMouseMove(event: MouseEvent) {
+  if (!editing.value) return
+  const rect = map.getContainer().getBoundingClientRect()
+  pendingEdgePoint = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  if (edgeHoverFrame) return
+  edgeHoverFrame = requestAnimationFrame(() => {
+    edgeHoverFrame = 0
+    if (!pendingEdgePoint || !editing.value) return
+    refreshEdgeHandle(L.point(pendingEdgePoint.x, pendingEdgePoint.y))
+  })
 }
 
 function startEdit(polygon: Polygon) {
@@ -1953,37 +2141,38 @@ function startEdit(polygon: Polygon) {
   editing.value = polygon
   const coords = (polygon.geometry as any).coordinates[0] as number[][]
   editPoints.value = coords.slice(0, -1).map(c => markRaw(L.latLng(c[1], c[0])))
+  cancelEdgeHover()
+  hideEdgeHandle()
+  editHandles.value.forEach(h => map.removeLayer(h.marker as any))
+  editHandles.value = editPoints.value.map(pt => makeEditHandle(pt))
   // Hide the original polygon layer while editing; other custom polygons stay.
   customLayer.clearLayers()
   polygons.value.filter(p => p.id !== polygon.id && !p.id.startsWith('country-')).forEach(addCustomLayer)
-  editMarkers.value = editPoints.value.map((pt, idx) => makeEditMarker(pt, idx))
   editLine.value = markRaw(L.polygon([...editPoints.value], {
     pane: 'customPane', renderer: customRenderer, interactive: false,
     color: '#e07a3f', weight: 2, fillOpacity: 0.1,
   }).addTo(map))
   map.doubleClickZoom.disable()
   map.getContainer().style.cursor = 'grab'
-  status.value = 'Drag vertices to edit · double-click a vertex to remove · Enter/Esc or Cancel edit to finish'
+  status.value = 'Drag vertices to reshape · hover an edge, then click or drag to add a point · double-click a vertex to remove · Enter/Esc to finish'
 }
 
 function removeEditVertex(idx: number) {
   if (editPoints.value.length <= 3) return
-  const m = editMarkers.value[idx]
-  editMarkers.value = editMarkers.value.filter((_, i) => i !== idx)
+  const handle = editHandles.value[idx]
+  if (handle) map.removeLayer(handle.marker as any)
+  editHandles.value = editHandles.value.filter((_, i) => i !== idx)
   editPoints.value = editPoints.value.filter((_, i) => i !== idx)
-  if (m) map.removeLayer(m as any)
-  // Rebuild markers so their indices match the new point list.
-  rebuildEditMarkers()
+  hideEdgeHandle()
   if (editLine.value) editLine.value.setLatLngs([...editPoints.value])
-}
-
-function rebuildEditMarkers() {
-  editMarkers.value.forEach(m => map.removeLayer(m as any))
-  editMarkers.value = editPoints.value.map((pt, idx) => makeEditMarker(pt, idx))
 }
 
 function finishEdit() {
   if (!editing.value) return
+  if (editPoints.value.length < 3) {
+    status.value = 'A polygon needs at least three vertices'
+    return
+  }
   const polygon = editing.value
   const coordinates = editPoints.value.map(p => [p.lng, p.lat])
   coordinates.push(coordinates[0])
@@ -1995,8 +2184,12 @@ function finishEdit() {
 }
 
 function cancelEdit(restore = true) {
-  editMarkers.value.forEach(m => map.removeLayer(m as any))
-  editMarkers.value = []
+  cancelEdgeHover()
+  hideEdgeHandle()
+  edgeDragging = false
+  edgeAddedHandle = null
+  editHandles.value.forEach(h => map.removeLayer(h.marker as any))
+  editHandles.value = []
   if (editLine.value) { map.removeLayer(editLine.value as any); editLine.value = null }
   editPoints.value = []
   editing.value = null

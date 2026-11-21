@@ -457,5 +457,11 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
   cursor: grab;
 }
+.edit-vertex--edge {
+  background: transparent;
+  border-color: rgba(224, 122, 63, 0.9);
+  box-shadow: none;
+  opacity: 0.65;
+}
 
 .is-drawing, .is-drawing .leaflet-interactive { cursor: crosshair !important; }
