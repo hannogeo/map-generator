@@ -19,6 +19,12 @@ use std::sync::Mutex;
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
+/// How far a walk may continue through panoramas that fail the filters.
+/// Accepted panoramas reset the counter, so this only limits gaps caused by
+/// rejected captures (old generations, wrong dates, etc.). The control was
+/// removed from the UI, so use a generous fixed value that covers short gaps.
+const LINKS_DEPTH: u32 = 5;
+
 const GOOGLE_PROVIDERS: [&str; 2] = ["google", "googleZoom"];
 const GENERATION_PROVIDERS: [&str; 7] = [
     "google",
@@ -405,18 +411,31 @@ impl<'a> Filters<'a> {
             .collect()
     }
 
+    /// Metadata endpoints occasionally fail transiently. Unlike a known empty
+    /// result, an unknown error should not permanently burn the id in `claimed`.
     async fn fetch_by_pano(&self, id: &str) -> Option<Pano> {
-        match self
-            .providers
-            .fetch(self.provider(), PanoRequest::by_pano(id))
-            .await
-        {
-            FetchResult {
-                status: FetchStatus::Ok,
-                pano: Some(pano),
-            } => Some(pano),
-            _ => None,
+        const TRIES: usize = 3;
+        for attempt in 0..TRIES {
+            match self
+                .providers
+                .fetch(self.provider(), PanoRequest::by_pano(id))
+                .await
+            {
+                FetchResult {
+                    status: FetchStatus::Ok,
+                    pano: Some(pano),
+                } => return Some(pano),
+                FetchResult {
+                    status: FetchStatus::UnknownError,
+                    ..
+                } if attempt + 1 < TRIES => {
+                    let delay = 40 * (attempt as u64 + 1) + (rand::random::<u64>() % 40);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                _ => return None,
+            }
         }
+        None
     }
 
     /// Sample one random or grid coordinate.
@@ -547,7 +566,10 @@ impl<'a> Filters<'a> {
             let Some(night) = res.short_description.clone() else {
                 return Vec::new();
             };
-            return self.collect(vec![(night, 0)], claimed, on_candidate).await;
+            let mut starts = vec![(night, 0)];
+            self.expand_claimed_root(&res, lat, lng, claimed, &mut starts)
+                .await;
+            return self.collect(starts, claimed, on_candidate).await;
         }
 
         if self.settings.filter_by_minutes.enabled && !self.provider().contains("google") {
@@ -615,7 +637,64 @@ impl<'a> Filters<'a> {
             }
         }
 
+        // Spatial search often returns an existing pano for samples near a
+        // filled cluster. Start from its unvisited neighbours instead of
+        // dropping the sample, otherwise the stretch between two walks can
+        // never grow outwards.
+        self.expand_claimed_root(&res, lat, lng, claimed, &mut starts)
+            .await;
+
         self.collect(starts, claimed, on_candidate).await
+    }
+
+    /// Panorama links and timeline entries that can seed a walk without
+    /// revisiting the already claimed root itself. Timeline walking also runs
+    /// in all-dates mode, so it must seed the walk there even without links.
+    fn neighbour_starts(&self, pano: &Pano) -> Vec<(String, u32)> {
+        let walk_links = self.settings.check_links;
+        let walk_time = walk_links || (self.check_all_dates && !self.settings.select_months);
+        if !walk_links && !walk_time {
+            return Vec::new();
+        }
+        let mut starts = Vec::new();
+        if walk_links {
+            starts.extend(pano.links.iter().map(|link| (link.pano.clone(), 1)));
+        }
+        if walk_time {
+            starts.extend(pano.time.iter().map(|entry| (entry.pano.clone(), 1)));
+        }
+        starts
+    }
+
+    /// When spatial search lands on an already found pano, seed the walk from
+    /// its unvisited neighbours. If links are asymmetric, the red photometa
+    /// dots around the sample are a last resort for finding the other side of
+    /// the gap.
+    async fn expand_claimed_root(
+        &self,
+        res: &Pano,
+        lat: f64,
+        lng: f64,
+        claimed: &Mutex<HashSet<String>>,
+        starts: &mut Vec<(String, u32)>,
+    ) {
+        if !pano_is_claimed(claimed, &res.pano_id) {
+            return;
+        }
+        let neighbours = self.neighbour_starts(res);
+        let has_unclaimed = neighbours
+            .iter()
+            .any(|(id, _)| !pano_is_claimed(claimed, id))
+            || starts.iter().any(|(id, _)| !pano_is_claimed(claimed, id));
+        starts.extend(neighbours);
+        if has_unclaimed
+            || !self.settings.check_links
+            || !GOOGLE_PROVIDERS.contains(&self.provider())
+        {
+            return;
+        }
+        let ids = crate::providers::google::nearby_pano_ids(self.providers, lat, lng, 8).await;
+        starts.extend(ids.into_iter().map(|id| (id, 1)));
     }
 
     async fn non_badcam(&self, pano_id: &str) -> Option<Pano> {
@@ -867,7 +946,7 @@ impl<'a> Filters<'a> {
         F: FnMut(Pano) -> Fut,
         Fut: Future<Output = bool>,
     {
-        let max_depth = self.settings.links_depth;
+        let max_depth = LINKS_DEPTH;
         let mut queue: VecDeque<(String, u32)> = VecDeque::new();
         for (id, depth) in starts {
             if depth <= max_depth && claim_pano(claimed, &id) {
@@ -890,10 +969,14 @@ impl<'a> Filters<'a> {
                 });
             }
 
-            let Some((_id, depth, pano)) = in_flight.next().await else {
+            let Some((id, depth, pano)) = in_flight.next().await else {
                 break;
             };
-            let Some(pano) = pano else { continue };
+            let Some(pano) = pano else {
+                // A transient failure must not keep later samples out forever.
+                unclaim_pano(claimed, &id);
+                continue;
+            };
             let in_country = self.rings.contains(pano.lat, pano.lng);
             let good = in_country && self.is_pano_good(&pano, &[]).await;
             let next_depth = if good { 1 } else { depth + 1 };
@@ -1103,6 +1186,13 @@ impl<'a> Filters<'a> {
     }
 }
 
+fn pano_is_claimed(claimed: &Mutex<HashSet<String>>, id: &str) -> bool {
+    claimed
+        .lock()
+        .map(|claimed| claimed.contains(id))
+        .unwrap_or(false)
+}
+
 fn claim_pano(claimed: &Mutex<HashSet<String>>, id: &str) -> bool {
     if id.is_empty() {
         return false;
@@ -1111,6 +1201,17 @@ fn claim_pano(claimed: &Mutex<HashSet<String>>, id: &str) -> bool {
         .lock()
         .map(|mut claimed| claimed.insert(id.to_string()))
         .unwrap_or(false)
+}
+
+/// Frees an id whose metadata could not be fetched, so a later sample can
+/// still walk into that branch.
+fn unclaim_pano(claimed: &Mutex<HashSet<String>>, id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(mut claimed) = claimed.lock() {
+        claimed.remove(id);
+    }
 }
 
 fn enqueue(
@@ -1383,5 +1484,148 @@ mod tests {
         assert_eq!(queue.len(), 1);
         enqueue(&mut queue, &claimed, "new", 1, 2);
         assert_eq!(queue.len(), 1, "an id must only be claimed once");
+    }
+
+    /// A sample in a gap resolves to a pano that was already found. Walking
+    /// must start at its unclaimed neighbours, otherwise the whole stretch
+    /// between two found clusters stays empty forever.
+    #[tokio::test]
+    async fn claimed_sample_walks_into_the_gap_between_two_clusters() {
+        let mut settings = Settings::default();
+        settings.check_links = true;
+        settings.from_date = "2007-01".into();
+        settings.to_date = "2026-11".into();
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let existing = "aaaaaaaaaaaaaaaaaaaaaa";
+        let gap_start = "bbbbbbbbbbbbbbbbbbbbbb";
+        let gap_end = "cccccccccccccccccccccc";
+        let other_existing = "dddddddddddddddddddddd";
+
+        let pano = |id: &str, links: &[&str]| Pano {
+            pano_id: id.into(),
+            provider: "google".into(),
+            image_date: Some("2020-01".into()),
+            world_height: 8192,
+            lat: 5.0,
+            lng: -2.65,
+            links: links
+                .iter()
+                .map(|next| Link {
+                    pano: (*next).into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        for pano in [
+            pano(existing, &[gap_start]),
+            pano(gap_start, &[existing, gap_end]),
+            pano(gap_end, &[gap_start, other_existing]),
+            pano(other_existing, &[gap_end]),
+        ] {
+            providers.cache_pano(pano);
+        }
+
+        let claimed = Mutex::new(HashSet::from([
+            existing.to_string(),
+            other_existing.to_string(),
+        ]));
+        let root = providers
+            .lookup_cached("google", existing)
+            .expect("cached root");
+        let starts = filters.neighbour_starts(&root);
+        assert_eq!(starts, vec![(gap_start.to_string(), 1)]);
+
+        let gap_pano = providers
+            .lookup_cached("google", gap_start)
+            .expect("cached gap pano");
+        assert!(filters.rings.contains(gap_pano.lat, gap_pano.lng));
+        assert!(filters.is_pano_good(&gap_pano, &[]).await);
+        let found = filters.collect(starts, &claimed, |_| async { true }).await;
+        let ids: Vec<&str> = found.iter().map(|pano| pano.pano_id.as_str()).collect();
+        assert_eq!(ids, vec![gap_start, gap_end]);
+    }
+
+    #[test]
+    fn all_dates_seeds_timeline_without_link_walking() {
+        let mut settings = Settings::default();
+        settings.check_links = false;
+        settings.check_all_dates = true;
+        settings.from_date = "2007-01".into();
+        settings.to_date = "2026-11".into();
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let pano = Pano {
+            links: vec![Link {
+                pano: "aaaaaaaaaaaaaaaaaaaaaa".into(),
+                ..Default::default()
+            }],
+            time: vec![TimeEntry {
+                pano: "bbbbbbbbbbbbbbbbbbbbbb".into(),
+                date: "2020-01".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            filters.neighbour_starts(&pano),
+            vec![("bbbbbbbbbbbbbbbbbbbbbb".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn failed_metadata_frees_the_claim() {
+        let claimed = Mutex::new(HashSet::from(["stale".to_string()]));
+        unclaim_pano(&claimed, "stale");
+        assert!(claimed.lock().unwrap().is_empty());
+        unclaim_pano(&claimed, "");
+        assert!(claimed.lock().unwrap().is_empty());
+    }
+
+    /// The fixed look-ahead must cross a few rejected captures; otherwise a
+    /// short old-generation stretch still splits the road into two clusters.
+    #[tokio::test]
+    async fn walk_crosses_several_rejected_captures() {
+        let mut settings = Settings::default();
+        settings.check_links = true;
+        settings.from_date = "2007-01".into();
+        settings.to_date = "2026-11".into();
+        let providers = Providers::new();
+        let rings = ghana_rings();
+        let filters = Filters::new(&settings, &providers, &rings);
+
+        let rejected = ["aaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbb", "cccccccccccccccccccccc"];
+        let accepted = "dddddddddddddddddddddd";
+        let pano = |id: &str, links: &[&str], world_height: u32| Pano {
+            pano_id: id.into(),
+            provider: "google".into(),
+            image_date: Some("2020-01".into()),
+            world_height,
+            lat: 5.0,
+            lng: -2.65,
+            links: links
+                .iter()
+                .map(|next| Link {
+                    pano: (*next).into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        providers.cache_pano(pano(rejected[0], &[rejected[1]], 0));
+        providers.cache_pano(pano(rejected[1], &[rejected[2]], 0));
+        providers.cache_pano(pano(rejected[2], &[accepted], 0));
+        providers.cache_pano(pano(accepted, &[], 8192));
+
+        let claimed = Mutex::new(HashSet::new());
+        let found = filters
+            .collect(vec![(rejected[0].to_string(), 1)], &claimed, |_| async { true })
+            .await;
+        let ids: Vec<&str> = found.iter().map(|pano| pano.pano_id.as_str()).collect();
+        assert_eq!(ids, vec![accepted]);
     }
 }

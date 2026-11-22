@@ -33,7 +33,6 @@ export const defaultSettings: Settings = {
   findNightCoverage: false,
   onlyOneInTimeframe: false,
   checkLinks: false,
-  linksDepth: 2,
   findPhotospheres: false,
   findDrones: false,
   filterByMinutes: { enabled: false, range: [0, 1440] },
@@ -59,7 +58,7 @@ export const defaultSettings: Settings = {
   apiKeys: { mapycz: '' },
   tag: true,
   panoId: 'enable',
-  markers: { noBlueLine: true, newRoad: true, gen4: true, gen2Or3: true, gen1: true },
+  markers: { noBlueLine: true, newRoad: true, gen4: true, gen2Or3: true, gen1: true, cluster: false },
   notification: { enabled: false, anyLocation: false, anyNoBlueLine: false, onePolygonComplete: false, allPolygonsComplete: false, target: 'desktop', discordWebhook: '' },
 }
 

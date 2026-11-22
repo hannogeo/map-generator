@@ -87,6 +87,33 @@ async fn tile_pano_ids(providers: &Providers, lat: f64, lng: f64) -> Vec<String>
         .collect()
 }
 
+/// Nearest panoramas in the sample's photometa tile. These are the red dots
+/// shown in the UI and can seed a walk when links are asymmetric, so the pano
+/// on the other side of a gap cannot be reached from the found one.
+pub async fn nearby_pano_ids(
+    providers: &Providers,
+    lat: f64,
+    lng: f64,
+    limit: usize,
+) -> Vec<String> {
+    let mut dots: Vec<PanoDot> = tile_dots(providers, lat, lng)
+        .await
+        .into_iter()
+        .filter(|dot| !dot.pano_id.is_empty())
+        .collect();
+    dots.sort_by(|a, b| {
+        let da = (a.lat - lat).powi(2) + (a.lng - lng).powi(2);
+        let db = (b.lat - lat).powi(2) + (b.lng - lng).powi(2);
+        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen = std::collections::HashSet::new();
+    dots.into_iter()
+        .filter(|dot| seen.insert(dot.pano_id.clone()))
+        .map(|dot| dot.pano_id)
+        .take(limit)
+        .collect()
+}
+
 /// Every point in one z17 photometa tile, including coverage-only entries
 /// with no resolvable pano id. Used by the close-zoom dot layer.
 pub async fn fetch_pano_dots(providers: &Providers, x: u32, y: u32) -> Vec<PanoDot> {

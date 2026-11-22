@@ -75,7 +75,6 @@ export interface Settings {
   findNightCoverage: boolean
   onlyOneInTimeframe: boolean
   checkLinks: boolean
-  linksDepth: number
   findPhotospheres: boolean
   findDrones: boolean
   filterByMinutes: { enabled: boolean; range: [number, number] }
@@ -93,6 +92,6 @@ export interface Settings {
   apiKeys: { mapycz: string }
   tag: boolean
   panoId: string
-  markers: { noBlueLine: boolean; newRoad: boolean; gen4: boolean; gen2Or3: boolean; gen1: boolean }
+  markers: { noBlueLine: boolean; newRoad: boolean; gen4: boolean; gen2Or3: boolean; gen1: boolean; cluster: boolean }
   notification: { enabled: boolean; anyLocation: boolean; anyNoBlueLine: boolean; onePolygonComplete: boolean; allPolygonsComplete: boolean; target: 'desktop' | 'discord' | 'both'; discordWebhook?: string }
 }

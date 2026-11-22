@@ -95,10 +95,16 @@
               <button class="tool primary" @mousedown.prevent @click="toggleDraw">
                 {{ drawing ? 'Finish drawing' : (editing ? 'Finish editing' : 'Draw') }}
               </button>
-              <button v-if="drawing" class="tool" @mousedown.prevent @click="removeLastDrawPoint" :disabled="!drawPoints.length">Undo point</button>
+              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="undoDrawPoint" :disabled="!drawPoints.length" title="Undo last point" aria-label="Undo last point">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></svg>
+              </button>
+              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="redoDrawPoint" :disabled="!redoDrawPoints.length" title="Redo last point" aria-label="Redo last point">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h3" /></svg>
+              </button>
               <button v-if="editing" class="tool" @mousedown.prevent @click="cancelEdit()">Cancel edit</button>
               <button class="tool" @mousedown.prevent @click="importGeoJson">Import</button>
-              <button class="tool danger" @mousedown.prevent @click="clearPolygons" :disabled="!polygons.length">Deselect all</button>
+              <button class="tool" @mousedown.prevent @click="exportPolygons" :disabled="!hasCustomPolygons" title="Export drawn polygons as JSON">Export</button>
+              <button class="tool danger" @mousedown.prevent @click="removeAllPolygons" :disabled="!polygons.length" title="Remove selected areas but keep their locations">Remove all</button>
             </div>
 
             <div class="empty-state" v-if="!polygons.length">
@@ -113,7 +119,7 @@
                     <img class="flag" :src="flagUrl(p.countryCode)" :alt="p.countryCode" @error="onFlagError" />
                     <span class="flag-code">{{ p.countryCode }}</span>
                   </span>
-                  <span class="area-name" :title="p.name" @click="p.id.startsWith('poly-') ? renamePolygon(p) : pickCountry(Number(p.id.replace('country-','')))" >{{ p.name }}</span>
+                  <span class="area-name" :title="p.name" @click="p.id.startsWith('country-') ? pickCountry(Number(p.id.replace('country-',''))) : renamePolygon(p)" >{{ p.name }}</span>
                 </div>
                 <div class="area-body">
                   <label class="goal-field">
@@ -123,10 +129,10 @@
                   <span class="area-count">{{ p.found.length }} / {{ p.nbNeeded }}</span>
                 </div>
                 <div class="area-actions">
-                  <button class="chip" :disabled="!p.found.length" @click="clearPolygonLocations(p)">Clear</button>
-                  <button class="chip" v-if="p.id.startsWith('poly-')" @click="askSavePolygon(p)">Save</button>
-                  <button class="chip" v-if="p.id.startsWith('poly-')" @click="startEdit(p)">Edit</button>
-                  <button class="chip danger" @click="askRemovePolygon(p)">{{ p.id.startsWith('poly-') ? 'Delete' : 'Remove' }}</button>
+                  <button class="chip" :disabled="!p.found.length" @click="askClearPolygonLocations(p)">Clear</button>
+                  <button class="chip" v-if="!p.id.startsWith('country-')" @click="askSavePolygon(p)">Save</button>
+                  <button class="chip" v-if="!p.id.startsWith('country-')" @click="startEdit(p)">Edit</button>
+                  <button class="chip danger" @click="removePolygon(p.id)">Remove</button>
                 </div>
               </div>
             </div>
@@ -248,13 +254,6 @@
               <label class="check" v-if="settings.provider === 'tencent'"><input type="checkbox" v-model="settings.findNightCoverage" /> Find night coverage</label>
               <label class="check"><input type="checkbox" v-model="settings.onlyOneInTimeframe" /> Only one panorama per location</label>
               <label class="check"><input type="checkbox" v-model="settings.checkLinks" /> Check linked panos</label>
-              <div class="field" v-if="settings.checkLinks" title="Maximum linked panoramas checked between accepted locations. The counter resets after each match.">
-                <span>Link look-ahead</span>
-                <div class="pair">
-                  <input type="range" min="1" max="10" step="1" v-model.number="settings.linksDepth" />
-                  <span class="value">{{ settings.linksDepth }}</span>
-                </div>
-              </div>
               <label class="check" v-if="isGoogle"><input type="checkbox" v-model="settings.ignoreBadcam" /> Ignore BadCam</label>
               <template v-if="generationOptions.length">
                 <label class="check"><input type="checkbox" v-model="generationEnabled" /> Find by generation</label>
@@ -401,6 +400,7 @@
             <label class="check" v-if="isGoogle"><input type="checkbox" v-model="settings.markers.gen2Or3" @change="refreshMarkerVisibility" /><span class="dot" style="background:#9a28ca"></span> Gen 2 or 3 update</label>
             <label class="check" v-if="isGoogle"><input type="checkbox" v-model="settings.markers.gen1" @change="refreshMarkerVisibility" /><span class="dot" style="background:#24ac20"></span> Gen 1 update</label>
             <label class="check"><input type="checkbox" v-model="markersVisible" @change="toggleMarkerLayer" /> Show pins on map</label>
+            <label class="check" title="Group nearby pins by zoom; click a cluster to zoom in"><input type="checkbox" v-model="settings.markers.cluster" /> Cluster pins</label>
           </div>
         </details>
 
@@ -445,15 +445,43 @@
       </div>
     </div>
 
-    <div v-if="removePolyOpen" class="modal-backdrop" @click="cancelRemovePolygon">
+    <div v-if="clearPolyOpen" class="modal-backdrop" @click="cancelClearPolygonLocations">
       <div class="modal" @click.stop>
-        <div class="modal-title">Remove polygon?</div>
+        <div class="modal-title">Clear locations?</div>
         <div class="modal-body">
-          This removes <strong>{{ polygonToRemove?.name }}</strong> and its {{ polygonToRemove ? locationCount(polygonToRemove.found.length) : '' }} from the map.
+          This removes {{ locationCount(polygonToClear?.found.length ?? 0) }} from <strong>{{ polygonToClear?.name }}</strong>. The area stays selected.
         </div>
         <div class="modal-actions">
-          <button @click="cancelRemovePolygon">Cancel</button>
-          <button class="danger" @click="confirmRemovePolygon">Remove</button>
+          <button @click="cancelClearPolygonLocations">Cancel</button>
+          <button class="danger" @click="confirmClearPolygonLocations">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="polygonExportOpen" class="modal-backdrop" @click="cancelPolygonExport">
+      <div class="modal export-modal" @click.stop>
+        <div class="modal-title">Export polygons</div>
+        <div class="modal-body">Select the polygons to export, then choose how they should be saved.</div>
+        <div class="export-tools">
+          <button @click="polygonExportSelection = customPolygons.map(p => p.id)">Select all</button>
+          <button @click="polygonExportSelection = []">Clear</button>
+        </div>
+        <div class="export-list">
+          <label class="check export-option" v-for="p in customPolygons" :key="p.id">
+            <input type="checkbox" :value="p.id" v-model="polygonExportSelection" />
+            <span class="export-swatch"></span>
+            <span class="export-name" :title="p.name">{{ p.name }}</span>
+          </label>
+        </div>
+        <div class="export-modes">
+          <label class="check"><input type="radio" name="polygon-export-mode" v-model="polygonExportSeparate" :value="false" /> One JSON file</label>
+          <label class="check"><input type="radio" name="polygon-export-mode" v-model="polygonExportSeparate" :value="true" /> Separate files in a folder</label>
+        </div>
+        <div class="modal-actions">
+          <button @click="cancelPolygonExport">Cancel</button>
+          <button class="primary" :disabled="!polygonExportSelection.length || exportingPolygons" @click="confirmPolygonExport">
+            {{ exportingPolygons ? 'Saving…' : 'Export' }}
+          </button>
         </div>
       </div>
     </div>
@@ -516,6 +544,7 @@ import L from 'leaflet'
 import AppSelect from './components/AppSelect.vue'
 import type { SelectOption, SelectValue } from './components/select'
 import { invoke } from '@tauri-apps/api/core'
+import { join as joinPath } from '@tauri-apps/api/path'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -551,7 +580,7 @@ import {
   GOOGLE_ROADMAP_RETRO,
 } from './google-themes'
 
-type MarkerRecord = Marker & { polygonId?: string }
+type MarkerRecord = Marker & { polygonId?: string; areaName?: string }
 
 function selectOptions<T extends SelectValue>(options: SelectOption<T>[]): SelectOption<T>[] {
   return options
@@ -572,6 +601,8 @@ const providerNames: Record<string, string> = {
 const altitudeProviders = ['google', 'googleZoom', 'bing', 'naver', 'mapillary', 'baidu', 'mapycz', 'asig', 'tencent']
 const PANO_DOTS_ZOOM = 17
 const PANO_DOT_TILE_ZOOM = 17
+const CLUSTER_PIXEL_SIZE = 48
+const CLUSTER_ZOOM_STEP = 2
 const months = selectOptions([
   { value: '01', label: 'January' }, { value: '02', label: 'February' },
   { value: '03', label: 'March' }, { value: '04', label: 'April' },
@@ -625,6 +656,8 @@ const providerOptions = computed(() => selectOptions(
 const settings = ref<Settings>(loadSettings())
 const polygons = ref<Polygon[]>([])
 const markers = ref<MarkerRecord[]>([])
+/** Locations kept after their area was removed; still exported and shown on the map. */
+const orphanMarkers = ref<MarkerRecord[]>([])
 const running = ref(false)
 const stopping = ref(false)
 const runElapsed = ref(0)
@@ -632,6 +665,7 @@ const runElapsed = ref(0)
 const SESSION_KEY = 'mg:session'
 const POLYGONS_KEY = 'mg:polygons'
 const SAVED_POLYGONS_KEY = 'mg:saved-polygons'
+const ORPHAN_LOCATIONS_KEY = 'mg:locations'
 let runStartedAt = 0
 let elapsedTimer: number | undefined
 const status = ref('Ready')
@@ -644,6 +678,7 @@ interface EditHandle {
 }
 
 const drawPoints = shallowRef<L.LatLng[]>([])
+const redoDrawPoints = shallowRef<L.LatLng[]>([])
 const drawLine = shallowRef<L.Polyline | null>(null)
 const drawPreviewLine = shallowRef<L.Polyline | null>(null)
 const drawMarkers = shallowRef<L.CircleMarker[]>([])
@@ -661,7 +696,11 @@ const updateAvailable = ref(false)
 const updateVersion = ref('')
 const showWebhook = ref(false)
 const markersVisible = ref(true)
-const totalGoal = computed(() => polygons.value.reduce((sum, polygon) => sum + (Number(polygon.nbNeeded) || 0), 0))
+const totalGoal = computed(() =>
+  polygons.value.reduce((sum, polygon) => sum + (Number(polygon.nbNeeded) || 0), 0) + orphanMarkers.value.length
+)
+const customPolygons = computed(() => polygons.value.filter(polygon => !polygon.id.startsWith('country-')))
+const hasCustomPolygons = computed(() => customPolygons.value.length > 0)
 let updateHandle: any = null
 let drawCursor: L.LatLng | null = null
 let drawFrame = 0
@@ -686,6 +725,9 @@ const radiusVisible = computed(() => !['apple', 'naver', 'yandex', 'googleZoom']
 
 let map: L.Map
 let markerLayer: L.LayerGroup
+let clusterLayer: L.LayerGroup
+let clusterTimer: number | undefined
+let clusterDirty = false
 let customLayer: L.LayerGroup
 let panoDotLayer: L.LayerGroup
 // Markers and drawn overlays use SVG renderers: a Canvas renderer fills the
@@ -693,6 +735,7 @@ let panoDotLayer: L.LayerGroup
 // working as soon as one marker existed.
 let markerRenderer: L.SVG
 let customRenderer: L.SVG
+let drawRenderer: L.SVG
 let panoRenderer: L.SVG
 let countryLayer: L.GeoJSON | null = null
 let activeBase: L.Layer | null = null
@@ -771,6 +814,27 @@ const countryMatches = computed(() => {
 })
 
 watch(settings, value => saveSettings(value), { deep: true })
+watch(() => settings.value.markers.cluster, enabled => {
+  if (!map || !clusterLayer) return
+  cancelClusterRebuild()
+  if (enabled) {
+    markerLayer.clearLayers()
+    removeEmptyMarkerRenderer()
+    rebuildClusters()
+  } else {
+    clusterLayer.clearLayers()
+    refreshMarkerVisibility()
+  }
+})
+watch([drawing, editing], () => {
+  if (!map || !clusterLayer) return
+  if (drawing.value || editing.value) {
+    cancelClusterRebuild()
+    clusterLayer.clearLayers()
+  } else if (settings.value.markers.cluster) {
+    scheduleClusterRebuild()
+  }
+})
 watch(isGoogle, google => {
   if (!google && settings.value.notification.target !== 'desktop') settings.value.notification.target = 'desktop'
 })
@@ -806,8 +870,14 @@ onMounted(async () => {
   map.getPane('countriesPane')!.style.zIndex = '350'
   map.createPane('customPane')
   map.getPane('customPane')!.style.zIndex = '360'
+  // Drawn borders are non-interactive; let clicks through to country borders.
+  map.getPane('customPane')!.style.pointerEvents = 'none'
   map.createPane('markersPane')
   map.getPane('markersPane')!.style.zIndex = '650'
+  map.createPane('drawPane')
+  map.getPane('drawPane')!.style.zIndex = '670'
+  map.createPane('clusterPane')
+  map.getPane('clusterPane')!.style.zIndex = '640'
   map.createPane('panoPointsPane')
   map.getPane('panoPointsPane')!.style.zIndex = '660'
   // The dots are non-interactive; never let their layer eat map clicks.
@@ -816,8 +886,13 @@ onMounted(async () => {
   // Canvas rendering keeps thousands of pins cheap; SVG chokes on large sets.
   markerRenderer = L.canvas({ pane: 'markersPane' })
   customRenderer = L.svg({ pane: 'customPane' })
+  // Draw vertices use their own SVG renderer: it never gets removed after a
+  // polygon is finished, so the next drawing still shows every point.
+  drawRenderer = L.svg({ pane: 'drawPane' })
+  drawRenderer.addTo(map)
   panoRenderer = L.svg({ pane: 'panoPointsPane' })
   markerLayer = L.layerGroup().addTo(map)
+  clusterLayer = L.layerGroup().addTo(map)
   customLayer = L.layerGroup().addTo(map)
   panoDotLayer = L.layerGroup().addTo(map)
 
@@ -826,6 +901,7 @@ onMounted(async () => {
   map.on('zoomend', () => {
     currentZoom.value = map.getZoom()
     void refreshPanoDots()
+    if (settings.value.markers.cluster) rebuildClusters()
   })
   map.on('moveend', () => { void refreshPanoDots() })
   map.on('click', onMapClick)
@@ -846,9 +922,11 @@ onMounted(async () => {
     // Drop the snapshots the previous page wrote, so nothing is restored.
     try {
       localStorage.removeItem(POLYGONS_KEY)
+      localStorage.removeItem(ORPHAN_LOCATIONS_KEY)
     } catch {}
   } else {
     await loadSavedPolygons()
+    loadOrphanMarkers()
   }
 
   unlisteners.push(await listen('generation:location', (event: any) => {
@@ -863,6 +941,7 @@ onMounted(async () => {
     if (seenMarkers.has(key)) return
     seenMarkers.add(key)
     marker.polygonId = payload.polygonId
+    marker.areaName = polygon.name
     markers.value.push(marker)
     addMarkerToMap(marker)
     polygon.found.push(marker)
@@ -925,6 +1004,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopElapsedTimer()
+  cancelClusterRebuild()
   window.removeEventListener('beforeunload', endSession)
   window.removeEventListener('keydown', onKeyDown)
   if (unlistenClose) unlistenClose()
@@ -982,6 +1062,29 @@ function writePolygons() {
     }))
     localStorage.setItem(POLYGONS_KEY, JSON.stringify(slim))
   } catch {}
+  try {
+    localStorage.setItem(ORPHAN_LOCATIONS_KEY, JSON.stringify(orphanMarkers.value))
+  } catch {}
+}
+
+/** Locations from removed areas survive reloads even without their polygon. */
+function loadOrphanMarkers() {
+  try {
+    const raw = localStorage.getItem(ORPHAN_LOCATIONS_KEY)
+    if (!raw) return
+    const saved = JSON.parse(raw)
+    if (!Array.isArray(saved)) return
+    for (const marker of saved) {
+      const key = `${marker.panoId ?? ''}|${marker.source ?? ''}`
+      if (seenMarkers.has(key)) continue
+      seenMarkers.add(key)
+      orphanMarkers.value.push(marker)
+      markers.value.push(marker)
+      addMarkerToMap(marker)
+    }
+  } catch (error) {
+    console.warn('failed to load saved locations', error)
+  }
 }
 
 async function loadSavedPolygons() {
@@ -1003,6 +1106,7 @@ async function loadSavedPolygons() {
       if (!polygon.id?.startsWith('country-')) addCustomLayer(polygon)
       for (const marker of polygon.found || []) {
         marker.polygonId = polygon.id
+        marker.areaName = polygon.name
         seenMarkers.add(`${marker.panoId ?? ''}|${marker.source ?? ''}`)
         markers.value.push(marker)
         record.found.push(marker)
@@ -1143,11 +1247,17 @@ function onProviderChange() {
 function toggleMarkerLayer() {
   if (!map) return
   if (markersVisible.value) {
-    markerLayer.addTo(map)
+    if (settings.value.markers.cluster) {
+      clusterLayer.addTo(map)
+      rebuildClusters()
+    } else {
+      markerLayer.addTo(map)
+    }
     if (map.getZoom() >= PANO_DOTS_ZOOM) panoDotLayer.addTo(map)
     void refreshPanoDots()
   } else {
     map.removeLayer(markerLayer)
+    clusterLayer.clearLayers()
     removeEmptyMarkerRenderer()
     map.removeLayer(panoDotLayer)
   }
@@ -1226,8 +1336,7 @@ function toggleCountryByIndex(index: number) {
   const id = `country-${index}`
   const existing = polygons.value.find(p => p.id === id)
   if (existing) {
-    polygons.value = polygons.value.filter(p => p.id !== id)
-    existing.found.forEach(marker => removeMarkerRecord(marker))
+    removePolygon(id)
   } else {
     polygons.value.push({
       id,
@@ -1286,6 +1395,40 @@ function onDrawMouseMove(event: MouseEvent) {
   })
 }
 
+function createDrawDot(latlng: L.LatLng, isFirst: boolean) {
+  const dot = markRaw(L.circleMarker(latlng, {
+    pane: 'drawPane', renderer: drawRenderer,
+    interactive: isFirst,
+    radius: isFirst ? 9 : 4,
+    color: '#e07a3f', fillColor: isFirst ? '#ffffff' : '#e07a3f', fillOpacity: 1,
+    weight: isFirst ? 2.5 : 1,
+  }).addTo(map))
+  if (isFirst) {
+    dot.on('click', (e: any) => { L.DomEvent.stopPropagation(e); finishDraw() })
+  }
+  return dot
+}
+
+/** Adds a vertex to the in-progress polygon; a new point drops the redo history. */
+function appendDrawPoint(latlng: L.LatLng, clearRedo = true) {
+  const point = markRaw(latlng)
+  const isFirst = drawPoints.value.length === 0
+  // shallowRef needs a new array for template updates (e.g. the undo/redo buttons).
+  drawPoints.value = [...drawPoints.value, point]
+  if (clearRedo) redoDrawPoints.value = []
+  drawMarkers.value = [...drawMarkers.value, createDrawDot(point, isFirst)]
+  if (drawLine.value) {
+    drawLine.value.setLatLngs([...drawPoints.value])
+  } else {
+    drawLine.value = markRaw(L.polyline([...drawPoints.value], {
+      pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
+    }).addTo(map))
+  }
+  drawCursor = point
+  refreshDrawPreview()
+  status.value = `Drawing · ${drawPoints.value.length} vertices`
+}
+
 function onMapClick(event: L.LeafletMouseEvent) {
   if (editing.value) return
   if (!drawing.value) return
@@ -1299,37 +1442,17 @@ function onMapClick(event: L.LeafletMouseEvent) {
       return
     }
   }
-  // shallowRef needs a new array for template updates (e.g. the undo button).
-  drawPoints.value = [...drawPoints.value, markRaw(event.latlng)]
-  const isFirst = drawPoints.value.length === 1
-  const dot = markRaw(L.circleMarker(event.latlng, {
-    pane: 'markersPane', renderer: markerRenderer,
-    radius: isFirst ? 9 : 4,
-    color: '#e07a3f', fillColor: isFirst ? '#ffffff' : '#e07a3f', fillOpacity: 1,
-    weight: isFirst ? 2.5 : 1,
-  }).addTo(map))
-  if (isFirst) {
-    dot.on('click', (e: any) => { L.DomEvent.stopPropagation(e); finishDraw() })
-  }
-  drawMarkers.value = [...drawMarkers.value, dot]
-  if (drawLine.value) {
-    drawLine.value.setLatLngs([...drawPoints.value])
-  } else {
-    drawLine.value = markRaw(L.polyline([...drawPoints.value], {
-      pane: 'customPane', renderer: customRenderer, interactive: false, color: '#e07a3f', weight: 2,
-    }).addTo(map))
-  }
-  drawCursor = markRaw(event.latlng)
-  refreshDrawPreview()
-  status.value = `Drawing · ${drawPoints.value.length} vertices`
+  appendDrawPoint(event.latlng)
 }
 
 /** Removes the most recently placed vertex while drawing. */
-function removeLastDrawPoint() {
+function undoDrawPoint() {
   if (!drawing.value || !drawPoints.value.length) return
+  const point = drawPoints.value[drawPoints.value.length - 1]
   const dot = drawMarkers.value[drawMarkers.value.length - 1]
   drawMarkers.value = drawMarkers.value.slice(0, -1)
   drawPoints.value = drawPoints.value.slice(0, -1)
+  redoDrawPoints.value = [...redoDrawPoints.value, point]
   if (dot) map.removeLayer(dot as any)
   if (!drawPoints.value.length) {
     if (drawLine.value) {
@@ -1342,7 +1465,15 @@ function removeLastDrawPoint() {
   refreshDrawPreview()
   status.value = drawPoints.value.length
     ? `Drawing · ${drawPoints.value.length} vertices`
-    : 'Click to place vertices · click first point or double-click to finish · Backspace to undo'
+    : 'Click to place vertices · click first point or double-click to finish · Backspace / Ctrl+Z to undo'
+}
+
+/** Restores the most recently undone vertex. */
+function redoDrawPoint() {
+  if (!drawing.value || !redoDrawPoints.value.length) return
+  const point = redoDrawPoints.value[redoDrawPoints.value.length - 1]
+  redoDrawPoints.value = redoDrawPoints.value.slice(0, -1)
+  appendDrawPoint(point, false)
 }
 
 function toggleDraw() {
@@ -1351,12 +1482,13 @@ function toggleDraw() {
   else {
     drawing.value = true
     drawPoints.value = []
+    redoDrawPoints.value = []
     drawCursor = null
     clearDrawPreview()
     map.doubleClickZoom.disable()
     map.getContainer().classList.add('is-drawing')
     map.getContainer().style.cursor = 'crosshair'
-    status.value = 'Click to place vertices · click first point or double-click to finish · Backspace to undo'
+    status.value = 'Click to place vertices · click first point or double-click to finish · Backspace / Ctrl+Z to undo'
   }
 }
 
@@ -1394,6 +1526,7 @@ function cancelDrawing() {
     drawLine.value = null
   }
   drawPoints.value = []
+  redoDrawPoints.value = []
   drawCursor = null
   clearDrawPreview()
   if (drawing.value) {
@@ -1402,27 +1535,41 @@ function cancelDrawing() {
     map.getContainer().classList.remove('is-drawing')
     map.getContainer().style.cursor = ''
   }
+  removeEmptyMarkerRenderer()
 }
 
-function askRemovePolygon(polygon: Polygon) {
-  // Built-in countries are a simple toggle; custom polygons need confirmation.
-  if (!polygon.id.startsWith('poly-')) {
-    removePolygon(polygon.id)
-    return
+function askClearPolygonLocations(polygon: Polygon) {
+  if (!polygon.found.length) return
+  polygonToClear.value = polygon
+  clearPolyOpen.value = true
+}
+
+function cancelClearPolygonLocations() {
+  clearPolyOpen.value = false
+  polygonToClear.value = null
+}
+
+function confirmClearPolygonLocations() {
+  const polygon = polygonToClear.value
+  cancelClearPolygonLocations()
+  if (!polygon) return
+  polygon.found.forEach(marker => removeMarkerRecord(marker))
+  polygon.found = []
+  persistPolygons()
+  status.value = `Cleared locations in "${polygon.name}"`
+}
+
+/** Keeps a polygon's locations on the map once the polygon itself is gone. */
+function transferPolygonMarkers(polygon: Polygon) {
+  for (const found of polygon.found) {
+    const marker = found as MarkerRecord
+    // Detach from the removed area so a later area with the same id cannot
+    // claim these locations; keep the name for export grouping.
+    delete marker.polygonId
+    marker.areaName = polygon.name
+    orphanMarkers.value.push(marker)
   }
-  polygonToRemove.value = polygon
-  removePolyOpen.value = true
-}
-
-function cancelRemovePolygon() {
-  removePolyOpen.value = false
-  polygonToRemove.value = null
-}
-
-function confirmRemovePolygon() {
-  const id = polygonToRemove.value?.id
-  cancelRemovePolygon()
-  if (id) removePolygon(id)
+  polygon.found = []
 }
 
 function restoreCustomLayers() {
@@ -1479,11 +1626,12 @@ function confirmRename() {
 function removePolygon(id: string) {
   if (editing.value?.id === id) cancelEdit()
   const polygon = polygons.value.find(p => p.id === id)
-  if (polygon) polygon.found.forEach(marker => removeMarkerRecord(marker))
+  if (polygon) transferPolygonMarkers(polygon)
   polygons.value = polygons.value.filter(p => p.id !== id)
   if (!id.startsWith('country-')) restoreCustomLayers()
   refreshCountryStyles()
   persistPolygons()
+  if (polygon) status.value = `Removed "${polygon.name}" · locations kept`
 }
 
 function askSavePolygon(polygon: Polygon) {
@@ -1554,12 +1702,13 @@ function confirmDeleteSavedPolygon() {
   }
 }
 
-function clearPolygons() {
-  polygons.value.forEach(p => p.found.forEach(marker => removeMarkerRecord(marker)))
+function removeAllPolygons() {
+  polygons.value.forEach(transferPolygonMarkers)
   polygons.value = []
   customLayer.clearLayers()
   refreshCountryStyles()
   persistPolygons()
+  status.value = 'Areas removed · locations kept'
 }
 
 async function importGeoJson() {
@@ -1632,11 +1781,109 @@ function markerVisible(marker: Marker) {
   }
 }
 
+function ensureMarkerRenderer() {
+  if (map && !map.hasLayer(markerRenderer)) markerRenderer.addTo(map)
+}
+
 /** An empty canvas renderer still covers the map and swallows country clicks. */
 function removeEmptyMarkerRenderer() {
+  if (drawing.value || editing.value || drawMarkers.value.length) return
   if (markerLayer.getLayers().length === 0 && map.hasLayer(markerRenderer)) {
     map.removeLayer(markerRenderer)
   }
+}
+
+function clusterCellKey(lat: number, lng: number, zoom: number) {
+  const point = map.project([lat, lng], zoom)
+  return `${Math.floor(point.x / CLUSTER_PIXEL_SIZE)}:${Math.floor(point.y / CLUSTER_PIXEL_SIZE)}`
+}
+
+/** Pixel-grid clustering: counts split naturally as the zoom level changes. */
+function rebuildClusters() {
+  if (!map || !clusterLayer) return
+  clusterLayer.clearLayers()
+  if (!settings.value.markers.cluster || !markersVisible.value || drawing.value || editing.value) return
+  // Drawing/editing temporarily reattaches the shared canvas renderer. In
+  // cluster mode it is empty, so remove it or it covers the cluster icons.
+  removeEmptyMarkerRenderer()
+
+  const zoom = map.getZoom()
+  const cells = new Map<string, MarkerRecord[]>()
+  for (const { marker } of markerLayers) {
+    if (!markerVisible(marker)) continue
+    const key = clusterCellKey(marker.lat, marker.lng, zoom)
+    const bucket = cells.get(key)
+    if (bucket) bucket.push(marker)
+    else cells.set(key, [marker])
+  }
+
+  for (const bucket of cells.values()) {
+    if (bucket.length === 1) {
+      const marker = bucket[0]
+      const pin = L.marker([marker.lat, marker.lng], {
+        pane: 'clusterPane',
+        icon: L.divIcon({
+          className: 'pin-cluster pin-cluster--single',
+          html: `<span style="--pin:${markerColour(marker)}"></span>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        }),
+      })
+      pin.on('click', (event: any) => {
+        L.DomEvent.stopPropagation(event)
+        openPanorama(marker)
+      })
+      clusterLayer.addLayer(pin)
+      continue
+    }
+
+    const group = bucket
+    const centerPoint = group.reduce(
+      (sum, marker) => sum.add(map.project([marker.lat, marker.lng], zoom)),
+      L.point(0, 0),
+    ).divideBy(group.length)
+    const cluster = L.marker(map.unproject(centerPoint, zoom), {
+      pane: 'clusterPane',
+      icon: L.divIcon({
+        className: 'pin-cluster',
+        html: `<span>${group.length}</span>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+      }),
+    })
+    cluster.on('click', (event: any) => {
+      L.DomEvent.stopPropagation(event)
+      if (drawing.value || editing.value) return
+      if (map.getZoom() >= map.getMaxZoom()) {
+        status.value = `${group.length} locations at this zoom`
+        return
+      }
+      const bounds = L.latLngBounds(group.map(marker => L.latLng(marker.lat, marker.lng)))
+      map.fitBounds(bounds, {
+        padding: [60, 60],
+        maxZoom: Math.min(map.getZoom() + CLUSTER_ZOOM_STEP, map.getMaxZoom()),
+      })
+    })
+    clusterLayer.addLayer(cluster)
+  }
+}
+
+function scheduleClusterRebuild() {
+  if (!map || !settings.value.markers.cluster) return
+  clusterDirty = true
+  if (clusterTimer) return
+  clusterTimer = window.setTimeout(() => {
+    clusterTimer = undefined
+    if (!clusterDirty) return
+    clusterDirty = false
+    rebuildClusters()
+  }, 120)
+}
+
+function cancelClusterRebuild() {
+  if (clusterTimer) window.clearTimeout(clusterTimer)
+  clusterTimer = undefined
+  clusterDirty = false
 }
 
 function addMarkerToMap(marker: MarkerRecord) {
@@ -1652,7 +1899,8 @@ function addMarkerToMap(marker: MarkerRecord) {
   })
   layer.on('click', () => openPanorama(marker))
   markerLayers.push({ marker, layer })
-  if (markerVisible(marker)) layer.addTo(markerLayer)
+  if (settings.value.markers.cluster) scheduleClusterRebuild()
+  else if (markerVisible(marker)) layer.addTo(markerLayer)
 }
 
 function removeMarkerRecord(marker: MarkerRecord) {
@@ -1666,15 +1914,21 @@ function removeMarkerRecord(marker: MarkerRecord) {
     markerLayer.removeLayer(markerLayers[entryIndex].layer)
     markerLayers.splice(entryIndex, 1)
     removeEmptyMarkerRenderer()
+    if (settings.value.markers.cluster) scheduleClusterRebuild()
   }
 }
 
 function refreshMarkerVisibility() {
-  markerLayers.forEach(({ marker, layer }) => {
-    if (markerVisible(marker)) layer.addTo(markerLayer)
-    else markerLayer.removeLayer(layer)
-  })
-  removeEmptyMarkerRenderer()
+  if (settings.value.markers.cluster) {
+    scheduleClusterRebuild()
+  } else {
+    ensureMarkerRenderer()
+    markerLayers.forEach(({ marker, layer }) => {
+      if (markerVisible(marker)) layer.addTo(markerLayer)
+      else markerLayer.removeLayer(layer)
+    })
+    removeEmptyMarkerRenderer()
+  }
   saveSettings(settings.value)
 }
 
@@ -1895,8 +2149,12 @@ async function stop() {
 
 const confirmOpen = ref(false)
 const clearAllOpen = ref(false)
-const removePolyOpen = ref(false)
-const polygonToRemove = ref<Polygon | null>(null)
+const clearPolyOpen = ref(false)
+const polygonToClear = ref<Polygon | null>(null)
+const polygonExportOpen = ref(false)
+const polygonExportSelection = ref<string[]>([])
+const polygonExportSeparate = ref(false)
+const exportingPolygons = ref(false)
 const savedPolygons = ref<any[]>([])
 const savedPolygonQuery = ref('')
 const savePolyOpen = ref(false)
@@ -1979,8 +2237,11 @@ function clearGenerationState() {
   cancelDrawing()
   if (editing.value) cancelEdit()
   markers.value = []
+  orphanMarkers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
+  cancelClusterRebuild()
+  clusterLayer.clearLayers()
   removeEmptyMarkerRenderer()
   panoDotLayer.clearLayers()
   markersVisible.value = true
@@ -2206,16 +2467,10 @@ function cancelEdit(restore = true) {
   editing.value = null
   map.doubleClickZoom.enable()
   map.getContainer().style.cursor = ''
+  removeEmptyMarkerRenderer()
   if (restore) restoreCustomLayers()
   status.value = 'Editing cancelled'
 }
-function clearPolygonLocations(polygon: Polygon) {
-  polygon.found.forEach(marker => removeMarkerRecord(marker))
-  polygon.found = []
-  status.value = `${polygon.name} cleared`
-  persistPolygons()
-}
-
 function askClearAllLocations() {
   if (!markers.value.length) return
   clearAllOpen.value = true
@@ -2229,8 +2484,11 @@ function clearAllLocations() {
     polygon.found = []
   })
   markers.value = []
+  orphanMarkers.value = []
   markerLayers.length = 0
   markerLayer.clearLayers()
+  cancelClusterRebuild()
+  clusterLayer.clearLayers()
   removeEmptyMarkerRenderer()
   persistPolygons()
 }
@@ -2335,11 +2593,114 @@ function exportCsv(markerList: MarkerRecord[]) {
   saveText(name, [header, ...rows].join('\n'), 'csv')
 }
 
+/** GeoJSON FeatureCollection, matching the website's polygon/layer export. */
+function polygonExportData(list: Polygon[]) {
+  return {
+    type: 'FeatureCollection',
+    features: list.map(polygon => ({
+      type: 'Feature',
+      properties: {
+        name: polygon.name,
+        ...(polygon.countryCode ? { countryCode: polygon.countryCode } : {}),
+      },
+      geometry: polygon.geometry,
+    })),
+  }
+}
+
+/** One polygon saves directly; multiple polygons get a small export panel. */
+function exportPolygons() {
+  const list = customPolygons.value
+  if (!list.length) {
+    showExportNotice('No drawn polygons to export')
+    return
+  }
+  if (list.length === 1) {
+    void savePolygonFiles([list[0]], false)
+    return
+  }
+  polygonExportSelection.value = list.map(polygon => polygon.id)
+  polygonExportSeparate.value = false
+  polygonExportOpen.value = true
+}
+
+function cancelPolygonExport() {
+  polygonExportOpen.value = false
+}
+
+async function confirmPolygonExport() {
+  if (exportingPolygons.value) return
+  const list = customPolygons.value.filter(polygon => polygonExportSelection.value.includes(polygon.id))
+  if (!list.length) return
+  const separate = polygonExportSeparate.value
+  cancelPolygonExport()
+  await savePolygonFiles(list, separate)
+}
+
+function uniquePolygonExportFiles(list: Polygon[]) {
+  const used = new Set<string>()
+  return list.map(polygon => {
+    const base = safeName(polygon.name)
+    let name = `${base}.json`
+    let suffix = 2
+    while (used.has(name.toLowerCase())) {
+      name = `${base}-${suffix++}.json`
+    }
+    used.add(name.toLowerCase())
+    return { name, content: JSON.stringify(polygonExportData([polygon]), null, 2) }
+  })
+}
+
+async function savePolygonFiles(list: Polygon[], separate: boolean) {
+  exportingPolygons.value = true
+  try {
+    if (!separate) {
+      const name = list.length === 1
+        ? `${safeName(list[0].name)}.json`
+        : 'drawn-polygons.json'
+      await saveText(name, JSON.stringify(polygonExportData(list), null, 2), 'json')
+      return
+    }
+
+    const files = uniquePolygonExportFiles(list)
+    let folder: string
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: 'Choose folder for polygon exports',
+      })
+      if (typeof selected !== 'string') {
+        showExportNotice('Folder selection cancelled')
+        return
+      }
+      folder = selected
+    } catch (error) {
+      console.warn('folder picker failed, downloading polygon files instead', error)
+      files.forEach(file => downloadText(file.name, file.content, false))
+      showExportNotice(`Downloaded ${files.length} polygon files`)
+      return
+    }
+
+    const subfolder = 'drawn-polygons'
+    const target = await joinPath(folder, subfolder)
+    let saved = 0
+    for (const file of files) {
+      const path = await joinPath(target, file.name)
+      await invoke('write_text_file', { path, content: file.content })
+      saved++
+    }
+    showExportNotice(`Saved ${saved} polygon ${saved === 1 ? 'file' : 'files'} in ${subfolder}`)
+  } finally {
+    exportingPolygons.value = false
+  }
+}
+
 /** "Estonia-1000-locations" (or "3-countries-1000-locations" for mixed exports). */
 function exportBaseName(markerList: MarkerRecord[]) {
   const polygonNames = new Map(polygons.value.map(polygon => [polygon.id, polygon.name]))
   const countries = [...new Set(markerList
-    .map(marker => ((marker.polygonId && polygonNames.get(marker.polygonId)) || marker.country || '').trim())
+    .map(marker => ((marker.polygonId && polygonNames.get(marker.polygonId)) || marker.areaName || marker.country || '').trim())
     .filter(Boolean))]
   const label = countries.length === 0
     ? 'All-countries'
@@ -2372,6 +2733,10 @@ async function saveText(name: string, content: string, extension: string) {
   } catch (error) {
     console.warn('native save failed, falling back to download', error)
   }
+  downloadText(name, content)
+}
+
+function downloadText(name: string, content: string, notify = true) {
   const blob = new Blob([content], { type: 'text/plain' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -2379,7 +2744,7 @@ async function saveText(name: string, content: string, extension: string) {
   anchor.download = name
   anchor.click()
   URL.revokeObjectURL(url)
-  showExportNotice(`Downloaded ${name}`)
+  if (notify) showExportNotice(`Downloaded ${name}`)
 }
 
 function isGenerationChecked(key: string) {
@@ -2415,9 +2780,20 @@ function onKeyDown(event: KeyboardEvent) {
     event.preventDefault()
     finishEdit()
   }
+  if (drawing.value && (event.ctrlKey || event.metaKey) && event.code === 'KeyZ') {
+    event.preventDefault()
+    if (event.shiftKey) redoDrawPoint()
+    else undoDrawPoint()
+    return
+  }
+  if (drawing.value && (event.ctrlKey || event.metaKey) && event.code === 'KeyY') {
+    event.preventDefault()
+    redoDrawPoint()
+    return
+  }
   if (drawing.value && (event.code === 'Backspace' || event.code === 'Delete')) {
     event.preventDefault()
-    removeLastDrawPoint()
+    undoDrawPoint()
   }
 }
 
