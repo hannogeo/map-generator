@@ -79,12 +79,13 @@
                 type="text"
                 v-model="countryQuery"
                 placeholder="Search country or territory…"
+                :disabled="running"
                 @focus="searchOpen = true"
                 @input="searchOpen = true"
                 @keydown.esc="countryQuery = ''"
               />
               <div class="search-results" v-if="countryQuery.trim() && searchOpen">
-                <button v-for="c in countryMatches" :key="c.index" type="button" @click="pickCountry(c.index)">
+                <button v-for="c in countryMatches" :key="c.index" type="button" :disabled="running" @click="pickCountry(c.index)">
                   <span class="country-name">{{ c.name }}</span>
                   <span class="country-parent" v-if="c.country && c.country !== c.name">{{ c.country }}</span>
                 </button>
@@ -92,19 +93,19 @@
               </div>
             </div>
             <div class="toolbar">
-              <button class="tool primary" @mousedown.prevent @click="toggleDraw">
+              <button class="tool primary" :disabled="running" @mousedown.prevent @click="toggleDraw">
                 {{ drawing ? 'Finish drawing' : (editing ? 'Finish editing' : 'Draw') }}
               </button>
-              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="undoDrawPoint" :disabled="!drawPoints.length" title="Undo last point" aria-label="Undo last point">
+              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="undoDrawPoint" :disabled="running || !drawPoints.length" title="Undo last point" aria-label="Undo last point">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></svg>
               </button>
-              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="redoDrawPoint" :disabled="!redoDrawPoints.length" title="Redo last point" aria-label="Redo last point">
+              <button v-if="drawing" class="tool icon-only" @mousedown.prevent @click="redoDrawPoint" :disabled="running || !redoDrawPoints.length" title="Redo last point" aria-label="Redo last point">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H10a6 6 0 0 0 0 12h3" /></svg>
               </button>
-              <button v-if="editing" class="tool" @mousedown.prevent @click="cancelEdit()">Cancel edit</button>
-              <button class="tool" @mousedown.prevent @click="importGeoJson">Import</button>
+              <button v-if="editing" class="tool" :disabled="running" @mousedown.prevent @click="cancelEdit()">Cancel edit</button>
+              <button class="tool" :disabled="running" @mousedown.prevent @click="importGeoJson">Import</button>
               <button class="tool" @mousedown.prevent @click="exportPolygons" :disabled="!hasCustomPolygons" title="Export drawn polygons as JSON">Export</button>
-              <button class="tool danger" @mousedown.prevent @click="removeAllPolygons" :disabled="!polygons.length" title="Remove selected areas but keep their locations">Remove all</button>
+              <button class="tool danger" @mousedown.prevent @click="removeAllPolygons" :disabled="running || !polygons.length" title="Remove selected areas but keep their locations">Remove all</button>
             </div>
 
             <div class="empty-state" v-if="!polygons.length">
@@ -119,7 +120,7 @@
                     <img class="flag" :src="flagUrl(p.countryCode)" :alt="p.countryCode" @error="onFlagError" />
                     <span class="flag-code">{{ p.countryCode }}</span>
                   </span>
-                  <span class="area-name" :title="p.name" @click="p.id.startsWith('country-') ? pickCountry(Number(p.id.replace('country-',''))) : renamePolygon(p)" >{{ p.name }}</span>
+                  <span class="area-name" :class="{ locked: running }" :title="p.name" @click="!running && (p.id.startsWith('country-') ? pickCountry(Number(p.id.replace('country-',''))) : renamePolygon(p))">{{ p.name }}</span>
                 </div>
                 <div class="area-body">
                   <label class="goal-field">
@@ -129,15 +130,15 @@
                   <span class="area-count">{{ p.found.length }} / {{ p.nbNeeded }}</span>
                 </div>
                 <div class="area-actions">
-                  <button class="chip" :disabled="!p.found.length" @click="askClearPolygonLocations(p)">Clear</button>
-                  <button class="chip" v-if="!p.id.startsWith('country-')" @click="askSavePolygon(p)">Save</button>
-                  <button class="chip" v-if="!p.id.startsWith('country-')" @click="startEdit(p)">Edit</button>
-                  <button class="chip danger" @click="removePolygon(p.id)">Remove</button>
+                  <button class="chip" :disabled="running || !p.found.length" @click="askClearPolygonLocations(p)">Clear</button>
+                  <button class="chip" v-if="!p.id.startsWith('country-')" :disabled="running" @click="askSavePolygon(p)">Save</button>
+                  <button class="chip" v-if="!p.id.startsWith('country-')" :disabled="running" @click="startEdit(p)">Edit</button>
+                  <button class="chip danger" :disabled="running" @click="removePolygon(p.id)">Remove</button>
                 </div>
               </div>
             </div>
             <div class="actions" v-if="markers.length">
-              <button class="danger clear-all" @click="askClearAllLocations">Clear all locations</button>
+              <button class="danger clear-all" :disabled="running" @click="askClearAllLocations">Clear all locations</button>
             </div>
           </div>
         </details>
@@ -150,6 +151,7 @@
                 type="text"
                 v-model="savedPolygonQuery"
                 placeholder="Search saved polygons…"
+                :disabled="running"
                 @keydown.esc="savedPolygonQuery = ''"
               />
             </div>
@@ -157,11 +159,11 @@
             <div class="area-list saved-list" v-else-if="filteredSavedPolygons.length">
               <div class="area-card saved-card" v-for="sp in filteredSavedPolygons" :key="sp.id">
                 <div class="area-head">
-                  <span class="area-name" :title="sp.name" @click="renameSavedPolygon(sp)">{{ sp.name }}</span>
+                  <span class="area-name" :class="{ locked: running }" :title="sp.name" @click="!running && renameSavedPolygon(sp)">{{ sp.name }}</span>
                 </div>
                 <div class="area-actions">
-                  <button class="chip" @click="loadSavedPolygon(sp)">Load</button>
-                  <button class="chip danger" @click="askDeleteSavedPolygon(sp)">Delete</button>
+                  <button class="chip" :disabled="running" @click="loadSavedPolygon(sp)">Load</button>
+                  <button class="chip danger" :disabled="running" @click="askDeleteSavedPolygon(sp)">Delete</button>
                 </div>
               </div>
             </div>
@@ -187,6 +189,7 @@
       </div>
 
       <div class="column right">
+        <div class="settings-panel" :inert="running" :class="{ locked: running }">
         <details class="section" open>
           <summary>Generator settings</summary>
           <div class="body">
@@ -403,9 +406,10 @@
             <label class="check" title="Group nearby pins by zoom; click a cluster to zoom in"><input type="checkbox" v-model="settings.markers.cluster" /> Cluster pins</label>
           </div>
         </details>
+        </div>
 
         <div class="run-row">
-          <button class="primary big" :disabled="!polygons.length" @click="toggleRun">
+          <button class="big" :class="running ? 'stop-run' : 'start-run'" :disabled="!polygons.length" @click="toggleRun">
             {{ running ? (stopping ? 'Stopping…' : 'Stop generation') : 'Start generation' }}
           </button>
           <button class="big danger" :disabled="!markers.length" @click="resetGeneration">Reset</button>
@@ -663,6 +667,8 @@ const stopping = ref(false)
 const runElapsed = ref(0)
 /** Marks the live page so a reload can be recognised as a refresh. */
 const SESSION_KEY = 'mg:session'
+/** Tracks whether the previous app session ended cleanly (survives a kill). */
+const CLEAN_EXIT_KEY = 'mg:clean-exit'
 const POLYGONS_KEY = 'mg:polygons'
 const SAVED_POLYGONS_KEY = 'mg:saved-polygons'
 const ORPHAN_LOCATIONS_KEY = 'mg:locations'
@@ -847,6 +853,12 @@ onMounted(async () => {
   // Reset: the previous run is discarded instead of being picked back up.
   const refreshed = sessionStorage.getItem(SESSION_KEY) === '1'
   sessionStorage.setItem(SESSION_KEY, '1')
+  // A killed process cannot run its exit handlers, so remember whether the
+  // previous session closed cleanly before marking this one as in progress.
+  const cleanExit = localStorage.getItem(CLEAN_EXIT_KEY) === '1'
+  try {
+    localStorage.setItem(CLEAN_EXIT_KEY, '0')
+  } catch {}
 
   // A refresh recreates the page but not the backend, so a run from the
   // previous page can still be going. Stop it before anything else.
@@ -918,8 +930,9 @@ onMounted(async () => {
 
   await loadCountries()
   loadSavedPolygonsLibrary()
-  if (refreshed) {
-    // Drop the snapshots the previous page wrote, so nothing is restored.
+  if (refreshed || !cleanExit) {
+    // A refresh or an unclean exit (task manager kill/crash) must not restore
+    // a run that can no longer be controlled.
     try {
       localStorage.removeItem(POLYGONS_KEY)
       localStorage.removeItem(ORPHAN_LOCATIONS_KEY)
@@ -982,6 +995,7 @@ onMounted(async () => {
       try {
         if (running.value) await stop()
         clearGenerationState()
+        markCleanExit()
       } finally {
         await appWindow.destroy()
       }
@@ -1024,10 +1038,17 @@ function endSession() {
     // Writes the empty polygon list to localStorage, so the reloaded page does
     // not restore the run that was just discarded.
     if (map) clearGenerationState()
+    markCleanExit()
   } catch (error) {
     console.warn('clear on unload failed', error)
   }
   saveSettings(settings.value)
+}
+
+function markCleanExit() {
+  try {
+    localStorage.setItem(CLEAN_EXIT_KEY, '1')
+  } catch {}
 }
 
 let persistTimer: number | undefined
@@ -1228,7 +1249,7 @@ function applyCoverage() {
   })
   coverageLayer = L.tileLayer(url, {
     maxZoom: 20,
-    minZoom: 3,
+    minZoom: 2,
     opacity: coverage.opacity,
   })
   coverageLayer.addTo(map)
@@ -1278,7 +1299,7 @@ async function loadCountries() {
         const index = Number(feature.properties?.__index ?? -1)
         if (index >= 0) countryLayers.set(index, layer as L.GeoJSON)
         layer.on('click', (event: L.LeafletMouseEvent) => {
-          if (drawing.value) return
+          if (running.value || drawing.value) return
           L.DomEvent.stopPropagation(event as any)
           if (index >= 0) toggleCountryByIndex(index)
         })
@@ -1322,6 +1343,7 @@ function refreshCountryStyles() {
 }
 
 function pickCountry(index: number) {
+  if (running.value) return
   countryQuery.value = ''
   searchOpen.value = false
   const id = `country-${index}`
@@ -1331,6 +1353,7 @@ function pickCountry(index: number) {
 }
 
 function toggleCountryByIndex(index: number) {
+  if (running.value) return
   const feature = countryFeatures.value[index]
   if (!feature) return
   const id = `country-${index}`
@@ -1430,7 +1453,7 @@ function appendDrawPoint(latlng: L.LatLng, clearRedo = true) {
 }
 
 function onMapClick(event: L.LeafletMouseEvent) {
-  if (editing.value) return
+  if (running.value || editing.value) return
   if (!drawing.value) return
   // Finish by clicking near the first vertex.
   if (drawPoints.value.length >= 3) {
@@ -1477,6 +1500,7 @@ function redoDrawPoint() {
 }
 
 function toggleDraw() {
+  if (running.value) return
   if (drawing.value) finishDraw()
   else if (editing.value) finishEdit()
   else {
@@ -1497,7 +1521,7 @@ function onDblClick() {
   else if (editing.value) finishEdit()
 }
 function finishDraw() {
-  if (!drawing.value) return
+  if (running.value || !drawing.value) return
   if (drawPoints.value.length >= 3) {
     const coordinates = drawPoints.value.map(point => [point.lng, point.lat])
     coordinates.push(coordinates[0])
@@ -1539,7 +1563,7 @@ function cancelDrawing() {
 }
 
 function askClearPolygonLocations(polygon: Polygon) {
-  if (!polygon.found.length) return
+  if (running.value || !polygon.found.length) return
   polygonToClear.value = polygon
   clearPolyOpen.value = true
 }
@@ -1550,12 +1574,13 @@ function cancelClearPolygonLocations() {
 }
 
 function confirmClearPolygonLocations() {
+  if (running.value) return
   const polygon = polygonToClear.value
   cancelClearPolygonLocations()
   if (!polygon) return
-  polygon.found.forEach(marker => removeMarkerRecord(marker))
+  removeMarkerRecords(polygon.found)
   polygon.found = []
-  persistPolygons()
+  persistPolygons(true)
   status.value = `Cleared locations in "${polygon.name}"`
 }
 
@@ -1578,6 +1603,7 @@ function restoreCustomLayers() {
 }
 
 function renamePolygon(polygon: Polygon) {
+  if (running.value) return
   renameSessionPolygon.value = polygon
   renameSavedPolygonTarget.value = null
   renameName.value = polygon.name
@@ -1586,6 +1612,7 @@ function renamePolygon(polygon: Polygon) {
 }
 
 function renameSavedPolygon(saved: any) {
+  if (running.value) return
   renameSessionPolygon.value = null
   renameSavedPolygonTarget.value = saved
   renameName.value = saved.name
@@ -1602,6 +1629,7 @@ function cancelRename() {
 }
 
 function confirmRename() {
+  if (running.value) return
   const name = renameName.value.trim()
   if (renameSavedPolygonTarget.value && name) {
     const duplicate = savedPolygons.value.some(item =>
@@ -1624,6 +1652,7 @@ function confirmRename() {
 }
 
 function removePolygon(id: string) {
+  if (running.value) return
   if (editing.value?.id === id) cancelEdit()
   const polygon = polygons.value.find(p => p.id === id)
   if (polygon) transferPolygonMarkers(polygon)
@@ -1635,6 +1664,7 @@ function removePolygon(id: string) {
 }
 
 function askSavePolygon(polygon: Polygon) {
+  if (running.value) return
   polygonToSave.value = polygon
   saveName.value = polygon.name
   saveError.value = ''
@@ -1667,6 +1697,7 @@ function confirmSavePolygon() {
 }
 
 function loadSavedPolygon(saved: any) {
+  if (running.value) return
   const polygon: Polygon = {
     id: `area-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     name: saved.name,
@@ -1683,6 +1714,7 @@ function loadSavedPolygon(saved: any) {
 
 
 function askDeleteSavedPolygon(saved: any) {
+  if (running.value) return
   savedPolygonToDelete.value = saved
   deleteSavedOpen.value = true
 }
@@ -1693,6 +1725,7 @@ function cancelDeleteSavedPolygon() {
 }
 
 function confirmDeleteSavedPolygon() {
+  if (running.value) return
   const id = savedPolygonToDelete.value?.id
   cancelDeleteSavedPolygon()
   if (id) {
@@ -1703,6 +1736,7 @@ function confirmDeleteSavedPolygon() {
 }
 
 function removeAllPolygons() {
+  if (running.value) return
   polygons.value.forEach(transferPolygonMarkers)
   polygons.value = []
   customLayer.clearLayers()
@@ -1712,6 +1746,7 @@ function removeAllPolygons() {
 }
 
 async function importGeoJson() {
+  if (running.value) return
   try {
     const selected = await openDialog({ filters: [{ name: 'GeoJSON', extensions: ['json', 'geojson'] }] })
     if (!selected || Array.isArray(selected)) return
@@ -1738,24 +1773,15 @@ async function importGeoJson() {
   }
 }
 
-/** Last goal the engine was told about, per polygon, for live goal edits. */
-const goalSentToEngine = new Map<string, number>()
-
 function onGoalChange(polygon: Polygon) {
   if (!Number.isFinite(polygon.nbNeeded) || polygon.nbNeeded < 0) polygon.nbNeeded = 0
   polygon.nbNeeded = Math.max(polygon.found.length, polygon.nbNeeded)
-  persistPolygons()
-  if (running.value) {
-    const sent = goalSentToEngine.get(polygon.id) ?? polygon.nbNeeded
-    // Raising a goal after its generators have exited needs a fresh run;
-    // otherwise the engine applies the new goal live, without restarting.
-    if (polygon.found.length >= sent && polygon.nbNeeded > sent) {
-      start()
-    } else {
-      invoke('update_goals', { goals: [{ id: polygon.id, nbNeeded: polygon.nbNeeded }] })
-        .then(() => goalSentToEngine.set(polygon.id, polygon.nbNeeded))
-        .catch(error => console.warn('goal update failed', error))
-    }
+  persistPolygons(true)
+  // A running generator reads this goal on its next loop, so the change takes
+  // effect immediately. Once the run has finished, the user starts a new one.
+  if (running.value && !stopping.value) {
+    invoke('update_goals', { goals: [{ id: polygon.id, nbNeeded: polygon.nbNeeded }] })
+      .catch(error => console.warn('goal update failed', error))
   }
 }
 
@@ -1916,6 +1942,27 @@ function removeMarkerRecord(marker: MarkerRecord) {
     removeEmptyMarkerRenderer()
     if (settings.value.markers.cluster) scheduleClusterRebuild()
   }
+}
+
+/** Bulk removal keeps large clears linear instead of searching per marker. */
+function removeMarkerRecords(list: MarkerRecord[]) {
+  if (!list.length) return
+  const raws = new Set(list.map(marker => toRaw(marker)))
+  markers.value = markers.value.filter(marker => !raws.has(toRaw(marker)))
+
+  let kept = 0
+  for (let i = 0; i < markerLayers.length; i++) {
+    const entry = markerLayers[i]
+    if (raws.has(toRaw(entry.marker))) {
+      markerLayer.removeLayer(entry.layer)
+    } else {
+      markerLayers[kept++] = entry
+    }
+  }
+  markerLayers.length = kept
+
+  removeEmptyMarkerRenderer()
+  if (settings.value.markers.cluster) scheduleClusterRebuild()
 }
 
 function refreshMarkerVisibility() {
@@ -2109,6 +2156,9 @@ async function start() {
     status.value = 'All location goals are already met'
     return
   }
+  // Area and drawing tools are locked once the run starts.
+  if (drawing.value) cancelDrawing()
+  if (editing.value) cancelEdit()
   runElapsed.value = 0
   running.value = true
   stopping.value = false
@@ -2120,8 +2170,6 @@ async function start() {
     nbNeeded: p.nbNeeded,
     found: p.found,
   }))
-  goalSentToEngine.clear()
-  polygonInput.forEach(p => goalSentToEngine.set(p.id, p.nbNeeded))
   try {
     await invoke('start_generation', {
       settings: settings.value,
@@ -2233,7 +2281,6 @@ function clearGenerationState() {
   stopElapsedTimer()
   runElapsed.value = 0
   seenMarkers.clear()
-  goalSentToEngine.clear()
   cancelDrawing()
   if (editing.value) cancelEdit()
   markers.value = []
@@ -2408,6 +2455,7 @@ function onEditMouseMove(event: MouseEvent) {
 }
 
 function startEdit(polygon: Polygon) {
+  if (running.value) return
   if (drawing.value) finishDraw()
   if (editing.value) finishEdit()
   editing.value = polygon
@@ -2472,17 +2520,13 @@ function cancelEdit(restore = true) {
   status.value = 'Editing cancelled'
 }
 function askClearAllLocations() {
-  if (!markers.value.length) return
+  if (running.value || !markers.value.length) return
   clearAllOpen.value = true
 }
 
 function clearAllLocations() {
   seenMarkers.clear()
-  goalSentToEngine.clear()
-  polygons.value.forEach(polygon => {
-    polygon.found.forEach(marker => removeMarkerRecord(marker))
-    polygon.found = []
-  })
+  polygons.value.forEach(polygon => { polygon.found = [] })
   markers.value = []
   orphanMarkers.value = []
   markerLayers.length = 0
@@ -2490,10 +2534,11 @@ function clearAllLocations() {
   cancelClusterRebuild()
   clusterLayer.clearLayers()
   removeEmptyMarkerRenderer()
-  persistPolygons()
+  persistPolygons(true)
 }
 
 function confirmClearAllLocations() {
+  if (running.value) return
   clearAllOpen.value = false
   clearAllLocations()
   status.value = 'All locations cleared'

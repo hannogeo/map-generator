@@ -380,7 +380,27 @@ button.icon.danger:hover:not(:disabled) { color: #ff9a9a; }
   flex: none;
 }
 .run-row button.big { flex: 1; height: 32px; font-size: 13px; }
-.run-row button.primary.big { flex: 1.6; }
+.run-row button.start-run {
+  flex: 1.6;
+  background: #2f9e5f;
+  border-color: #43b877;
+  color: #f0fff5;
+  font-weight: 700;
+}
+.run-row button.start-run:hover:not(:disabled) { background: #36ae69; }
+.run-row button.stop-run {
+  flex: 1.6;
+  background: #d05050;
+  border-color: #e46969;
+  color: #fff2f2;
+  font-weight: 700;
+}
+.run-row button.stop-run:hover:not(:disabled) { background: #db5b5b; }
+
+.settings-panel { display: flex; flex-direction: column; gap: 6px; }
+.settings-panel.locked { opacity: .55; }
+.area-name.locked { cursor: default; }
+.area-name.locked:hover { color: var(--ink); }
 
 .statusbar {
   position: absolute;
