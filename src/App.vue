@@ -393,6 +393,7 @@
             </div>
           </div>
         </details>
+        </div>
 
         <details class="section" open>
           <summary>Markers</summary>
@@ -406,7 +407,6 @@
             <label class="check" title="Group nearby pins by zoom; click a cluster to zoom in"><input type="checkbox" v-model="settings.markers.cluster" /> Cluster pins</label>
           </div>
         </details>
-        </div>
 
         <div class="run-row">
           <button class="big" :class="running ? 'stop-run' : 'start-run'" :disabled="!polygons.length" @click="toggleRun">
